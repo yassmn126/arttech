@@ -1,0 +1,13 @@
+{
+  "name": "genesis-memory-diary",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ArtTech memory diary: text + photos + song -> a living visual memory of the day",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
