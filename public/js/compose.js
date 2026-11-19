@@ -63,7 +63,7 @@ export async function renderCompose(view) {
    </section>
    <section class="win stagewin">
     <header class="titlebar"><span class="tt">Предпросмотр</span><span class="tsub">4:5 · живое воспоминание</span></header>
-    <div class="wbody stage">
+    <div class="wbody stage-c">
       <div class="frame sunken"><div class="placeholder">Здесь появится воспоминание дня: палитра из ваших фото, ритм из песни, форма из настроения текста.</div></div>
       <div class="controls" hidden><button type="button" class="bv play">▶ музыка</button></div>
       <div class="cplayer"></div>

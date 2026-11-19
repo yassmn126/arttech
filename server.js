@@ -86,6 +86,8 @@ async function listDays() {
       days.push({
         id: e.id, title: e.title, date: e.date, createdAt: e.createdAt, posterUrl: e.posterUrl,
         technique: e.style?.technique, moodLabel: e.style?.moodLabel, palette: e.style?.palette?.slice(0, 5),
+        bpm: e.style?.rhythm?.bpm ?? null,
+        mood: e.style?.fused ? { valence: e.style.fused.valence, arousal: e.style.fused.arousal, tension: e.style.fused.tension } : null,
         song: e.song ? { artist: e.song.artist, title: e.song.title } : null,
       });
     } catch { /* folder without a valid entry: skip */ }
