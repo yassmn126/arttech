@@ -3,19 +3,27 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Genesis — дневник атмосферы</title>
+  <title>genesis — дневник атмосферы</title>
+  <!-- Three.js from CDN (pinned). 3D modules are imported dynamically, so the app still works offline with flat discs. -->
+  <script type="importmap">
+  { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  } }
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600&family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <!-- UI: Nunito + Comfortaa (rounded, Cyrillic). Memory card: Fraunces, Caveat, JetBrains Mono. -->
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600&family=Comfortaa:wght@500;700&family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=JetBrains+Mono:wght@400;500&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='11' fill='none' stroke='%23b0462c' stroke-width='5'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%23ffd6e7'/><stop offset='.5' stop-color='%23d9f0ff'/><stop offset='1' stop-color='%23fff1c4'/></linearGradient></defs><circle cx='16' cy='16' r='14' fill='url(%23g)' stroke='%23c9bfe0'/><circle cx='16' cy='16' r='4' fill='%23fff' stroke='%23c9bfe0'/></svg>">
 </head>
 <body>
-  <header class="top">
-    <a class="brand" href="#/">genesis<span>дневник атмосферы</span></a>
-    <nav>
-      <a href="#/" data-nav="archive">Архив</a>
-      <a href="#/new" data-nav="new" class="btn">+ Новый день</a>
+  <header class="topbar">
+    <a class="brand" href="#/"><span class="brand-disc" aria-hidden="true"></span><span class="brand-name">genesis</span><span class="brand-sub">дневник атмосферы</span></a>
+    <nav class="nav" aria-label="Разделы">
+      <a href="#/" data-nav="archive" class="pill">Архив <b class="nav-count"></b></a>
+      <a href="#/new" data-nav="new" class="pill primary">+ Новый день</a>
     </nav>
   </header>
   <main id="view"></main>

@@ -56,12 +56,17 @@ export function buildStyle({ text, photo, music, date }) {
 
   // ---- 2. technique by score ----
   const kinds = new Set(text.places.map((p) => p.kind));
+  const sad = ['грусть', 'одиночество', 'скучание', 'слёзы'].some((h) => text.hits.includes(h));
   const scores = {
     impression: Math.max(0, valence) + (1 - arousal) * 0.8 + warmth * 0.5 + (1 - tension) * 0.3 + (kinds.has('nature') || kinds.has('water') ? 0.35 : 0),
     construct: arousal + tension * 1.2 + (music.genreKey === 'electronic' ? 0.5 : 0) + (kinds.has('work') ? 0.3 : 0) - Math.max(0, warmth) * 0.3,
-    nocturne: nostalgia * 1.2 + (1 - light) * 0.9 + (tod === 'night' ? 0.35 : 0) + music.eraAge * 0.4,
-    ma: (1 - arousal) + (text.words < 25 ? 0.45 : 0) + (photo.count === 1 ? 0.3 : 0) + (1 - photo.saturation) * 0.4 - Math.abs(valence) * 0.4,
-    field: -valence * 1.1 + (1 - arousal) * 0.8 + (music.valence < 0 ? 0.3 : 0),
+    // Nocturne = night and darkness. Nostalgia (which already includes the song's era) mostly
+    // shows up as grain on any technique, so it only nudges this score.
+    nocturne: nostalgia * 0.8 + (1 - light) * 0.9 + (tod === 'night' ? 0.45 : tod === 'evening' ? 0.15 : 0),
+    // Ma = serene emptiness: really sparse writing, and sadness pulls away from it
+    ma: (1 - arousal) + (text.words < 12 ? 0.45 : text.words < 25 ? 0.15 : 0) + (photo.count === 1 ? 0.3 : 0) + (1 - photo.saturation) * 0.4 - Math.abs(valence) * 0.4 - Math.max(0, -valence) * 0.4,
+    // Rothko = held, heavy feeling: low valence, slow minor music, explicit words of sadness
+    field: -valence * 1.1 + (1 - arousal) * 0.8 + (music.valence < 0 ? 0.3 : 0) + (sad ? 0.25 : 0),
     collage: valence * 0.9 + arousal * 0.9 + Math.min(photo.count, 5) * 0.1 + photo.saturation * 0.4 + (text.people.length ? 0.2 : 0) - tension * 0.6,
   };
   const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
@@ -72,18 +77,26 @@ export function buildStyle({ text, photo, music, date }) {
   // ---- 3. palette from photos, bent by mood ----
   const sw = photo.palette.map((p) => rgbToHsl(p.rgb));
   const hueTarget = warmth >= 0 ? 32 : 215, hueAmt = Math.abs(warmth) * 0.35;
-  const satK = clamp(0.45 + arousal * 0.6 + valence * 0.15 - (technique === 'field' || technique === 'ma' ? 0.2 : 0), 0.2, 1.3);
-  let cols = sw.map(([h, s, l]) => [hueToward(h, hueTarget, hueAmt), clamp(s * satK + (technique === 'construct' ? 0.25 : 0)), l]);
+  const quiet = technique === 'field' || technique === 'ma' || technique === 'nocturne';
+  // Vibrancy: energy scales saturation, but a floor keeps light photos from washing out into grey.
+  const satK = clamp(0.8 + arousal * 0.5 + valence * 0.2 - (quiet ? 0.12 : 0), 0.6, 1.45);
+  const minSat = (quiet ? 0.24 : 0.36) + Math.max(0, warmth) * 0.08;
+  const colourful = sw.find(([, s]) => s > 0.12);
+  const tone = (h, s) => (s < 0.08 ? (colourful ? colourful[0] : hueTarget) : h); // greys borrow the photo's real hue
+  let cols = sw.map(([h, s, l]) => [hueToward(tone(h, s), hueTarget, hueAmt), Math.max(minSat, clamp(s * satK + (technique === 'construct' ? 0.25 : 0))), l > 0.82 ? 0.7 : l]);
   cols.sort((a, b) => b[1] - a[1]);
-  const dom = sw[0] || [30, 0.3, 0.5];
+  const dom = sw[0] ? [tone(sw[0][0], sw[0][1]), sw[0][1], sw[0][2]] : [30, 0.3, 0.5];
   const darkPaper = technique === 'nocturne' || (technique === 'construct' && light < 0.45);
-  const paper = hslToHex([hueToward(dom[0], hueTarget, hueAmt), 0.14 + Math.max(0, warmth) * 0.12, darkPaper ? 0.1 : 0.9 + valence * 0.03]);
-  const ink = hslToHex([dom[0], 0.15, darkPaper ? 0.9 : 0.12]);
+  const ph = hueToward(dom[0], hueTarget, hueAmt);
+  // luminous pastel paper (cream / blush / sky) by day, a deep coloured night instead of black
+  const paper = darkPaper ? hslToHex([ph, 0.38, 0.11]) : hslToHex([ph, 0.42 + Math.max(0, warmth) * 0.25, clamp(0.935 + valence * 0.02, 0.9, 0.965)]);
+  const ink = hslToHex([ph, darkPaper ? 0.35 : 0.32, darkPaper ? 0.92 : 0.16]);
   if (technique === 'construct') { const h0 = cols[0]?.[0] ?? 210; cols = [[h0, 0.85, 0.5], [h0 + 150, 0.85, 0.55], [h0 + 210, 0.8, 0.45], ...cols]; }
-  while (cols.length < 4) cols.push([dom[0] + cols.length * 40, 0.5 * satK, 0.55]);
-  const accents = cols.slice(0, 5).map((c) => hslToHex([c[0], c[1], darkPaper ? clamp(c[2], 0.45, 0.75) : clamp(c[2], 0.3, 0.7)]));
+  // too few photo colours: add shades of the photo's own hue, never invented hues
+  while (cols.length < 4) cols.push([dom[0] + (cols.length % 2 ? 10 : -10), Math.max(minSat, clamp(dom[1] * satK)), 0.32 + cols.length * 0.12]);
+  const accents = cols.slice(0, 5).map((c) => hslToHex([c[0], c[1], darkPaper ? clamp(c[2], 0.45, 0.78) : clamp(c[2], 0.34, 0.7)]));
   const domHex = photo.palette[0] ? hslToHex(rgbToHsl(photo.palette[0].rgb)) : accents[0];
-  reasons.push({ k: 'Палитра', v: `Из ${photo.count} фото (доминирует ${domHex}) → сдвиг к ${warmth >= 0 ? 'охре' : 'сине-серому'} на ${pct(hueAmt)}, насыщенность ×${satK.toFixed(2)}${darkPaper ? ', тёмная бумага: ночь/низкий свет' : ''}.` });
+  reasons.push({ k: 'Палитра', v: `Из ${photo.count} фото (доминирует ${domHex}) → сдвиг к ${warmth >= 0 ? 'охре' : 'сине-серому'} на ${pct(hueAmt)}, насыщенность ×${satK.toFixed(2)}, не ниже ${pct(minSat)}; ${darkPaper ? 'тёмная цветная бумага: ночь/низкий свет' : 'светящаяся пастельная бумага'}.` });
 
   // ---- 4. typography (one family, mood-driven axes) ----
   const weight = Math.round((300 + arousal * 420 + tension * 180) / 100) * 100;

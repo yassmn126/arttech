@@ -5,7 +5,8 @@
   "description": "ArtTech memory diary: text + photos + song -> a living visual memory of the day",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test \"test/*.test.js\""
   },
   "engines": {
     "node": ">=20"

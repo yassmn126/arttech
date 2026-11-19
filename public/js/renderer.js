@@ -41,9 +41,14 @@ export class MemoryRenderer {
     this.prep = prepare(st.technique, this.imgs, st, this.win, R);
     this.grain = [0, 1, 2].map(() => noiseTile(R));
     this.paperTex = noiseTile(rng(7), 192);
+    // Dark pages get a real vignette; light pages a faint plum one, so light days stay luminous instead of greying.
     const v = this.ctx.createRadialGradient(W / 2, H * 0.45, W * 0.3, W / 2, H / 2, W * 0.85);
-    v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, `rgba(0,0,0,${st.texture.vignette})`);
+    const vc = st.darkPaper ? '0,0,0' : '70,40,90', va = st.texture.vignette * (st.darkPaper ? 1 : 0.4);
+    v.addColorStop(0, `rgba(${vc},0)`); v.addColorStop(1, `rgba(${vc},${va.toFixed(3)})`);
     this.vignette = v;
+    const b = this.ctx.createRadialGradient(W * 0.22, H * 0.12, 0, W * 0.22, H * 0.12, W * 0.9); // soft window light
+    b.addColorStop(0, 'rgba(255,248,232,0.32)'); b.addColorStop(1, 'rgba(255,248,232,0)');
+    this.bloom = st.darkPaper ? null : b;
     this.caption = this.makeCaption(this.day.text);
     return this;
   }
@@ -67,6 +72,7 @@ export class MemoryRenderer {
 
   renderAt(t) {
     const ctx = this.ctx, st = this.st, f = this.frameAt(t);
+    this.lastFrame = f; // the player's VU meter reads the beat pulse from here
     ctx.save();
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
     ctx.fillStyle = st.paper; ctx.fillRect(0, 0, W, H);
@@ -75,6 +81,7 @@ export class MemoryRenderer {
     ctx.restore();
 
     drawScene(ctx, st.technique, this.prep, f);
+    if (this.bloom) { ctx.save(); ctx.globalCompositeOperation = 'screen'; ctx.fillStyle = this.bloom; ctx.fillRect(0, 0, W, H); ctx.restore(); }
     this.drawType(ctx, f);
 
     ctx.save(); // film grain over everything, re-rolled each frame
@@ -122,14 +129,18 @@ export class MemoryRenderer {
     ctx.restore();
   }
 
-  start() {
-    this.stop();
-    this.t0 = performance.now();
+  start() { this.stop(); this.paused = false; this.t0 = performance.now(); this.loop(); }
+  loop() {
     // rAF timestamps can precede a restart()'s performance.now(), so never let t go negative
-    const loop = (now) => { this.renderAt(Math.max(0, (now - this.t0) / 1000)); this.raf = requestAnimationFrame(loop); };
-    this.raf = requestAnimationFrame(loop);
+    const tick = (now) => { this.renderAt(Math.max(0, (now - this.t0) / 1000)); this.raf = requestAnimationFrame(tick); };
+    this.raf = requestAnimationFrame(tick);
   }
-  restart() { this.t0 = performance.now(); }
+  get time() { return this.paused ? this.pausedAt : Math.max(0, (performance.now() - this.t0) / 1000); }
+  get cycle() { return this.imgs.length * this.st.rhythm.photoSeconds; } // one pass through all photos
+  pause() { if (this.paused) return; this.pausedAt = this.time; this.paused = true; this.stop(); }
+  resume() { if (!this.paused) return; this.paused = false; this.t0 = performance.now() - this.pausedAt * 1000; this.loop(); }
+  seek(t) { t = Math.max(0, t); this.t0 = performance.now() - t * 1000; if (this.paused) { this.pausedAt = t; this.renderAt(t); } }
+  restart() { this.seek(0); }
   stop() { cancelAnimationFrame(this.raf); this.raf = 0; }
 
   poster() { // a still that represents the day in the archive feed

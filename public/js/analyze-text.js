@@ -9,7 +9,7 @@ const MOOD = [
   [/счаст|радост|\bрада?\b|весел|happy|joy/, 0.8, 0.6, 0, 'радость'],
   [/любл|любов|нежн|обним|поцел|\blove/, 0.8, 0.4, 0, 'нежность'],
   [/тепл|уют|cozy|warm/, 0.6, 0.2, 0, 'тепло'],
-  [/спокой|тихо|тишин|умиротвор|calm|quiet|peace/, 0.5, 0.05, 0, 'покой'],
+  [/спокой|тихо|тишин|умиротвор|calm|quiet|peace/, 0.25, 0.05, 0, 'покой'], // quiet ≠ happy: only mildly positive
   [/смея|смех|хохот|laugh/, 0.8, 0.8, 0, 'смех'],
   [/красив|прекрасн|волшебн|beautiful|magic/, 0.6, 0.4, 0, 'красота'],
   [/разговар|болтал|talk/, 0.4, 0.3, 0, 'разговоры'],
@@ -18,7 +18,7 @@ const MOOD = [
   [/победил|получилось|успех|наконец-то|\bwin\b|success/, 0.8, 0.7, 0, 'успех'],
   [/устал|вымот|tired|exhaust/, -0.4, 0.2, 0.3, 'усталость'],
   [/груст|печал|тоск|\bsad/, -0.7, 0.2, 0.1, 'грусть'],
-  [/одино|lonely|alone/, -0.6, 0.15, 0.1, 'одиночество'],
+  [/одино|(?<!ни )\bодна\b|(?<!ни )\bодин\b(?! из| раз)|lonely|alone/, -0.5, 0.15, 0.1, 'одиночество'],
   [/плак|слез|\bcry|tears/, -0.7, 0.5, 0.3, 'слёзы'],
   [/скучал|скучаю|\bmiss/, -0.3, 0.2, 0, 'скучание'],
   [/тревог|волнов|страшн|боюсь|anxious|fear|scared/, -0.6, 0.7, 0.7, 'тревога'],
@@ -26,7 +26,7 @@ const MOOD = [
   [/дедлайн|сдач|срочн|не успева|аврал|экзамен|deadline|urgent|exam/, -0.2, 0.9, 0.9, 'дедлайн'],
   [/стресс|напряж|stress|tense/, -0.5, 0.8, 0.8, 'напряжение'],
   [/бегом|спешил|суета|суетн|\brush/, -0.1, 0.8, 0.5, 'спешка'],
-  [/ностальг|вспомина|детств|nostalg|memor/, 0.1, 0.2, 0, 'ностальгия'],
+  [/ностальг|вспомина|детств|стар[а-я]* фот|пересматрива|как раньше|nostalg|memor/, 0.1, 0.2, 0, 'ностальгия'],
   [/холодн|мерзл|замерз|\bcold|freez/, -0.1, 0.3, 0.1, 'холод'],
   [/дожд|ливен|\brain/, -0.1, 0.2, 0, 'дождь'],
   [/солнц|солнечн|\bsun/, 0.5, 0.4, 0, 'солнце'],
@@ -67,7 +67,7 @@ const PEOPLE = [
   [/девушк|girlfriend/, 'с девушкой'], [/\bпарн[еяю]|бойфренд|boyfriend/, 'с парнем'],
   [/\bмуж[ае]?м?\b|husband/, 'с мужем'], [/\bжен[ао]й?\b|\bwife/, 'с женой'],
   [/друз|подруг|\bдруг\b|friends?/, 'с друзьями'], [/\bмам|\bпап|родител|\bсемь|бабуш|дедуш|family/, 'с семьёй'],
-  [/коллег|команд|colleague|\bteam/, 'с командой'], [/\bодин\b|\bодна\b|одиночеств|\balone/, 'наедине с собой'],
+  [/коллег|команд|colleague|\bteam/, 'с командой'], [/(?<!ни )\bодин\b(?! из| раз)|(?<!ни )\bодна\b|одиночеств|\balone/, 'наедине с собой'],
 ];
 
 const OBJECTS = [
@@ -75,6 +75,17 @@ const OBJECTS = [
   [/закат|sunset/, 'закат'], [/звезд|\bstars/, 'звёзды'], [/костер|костр/, 'костёр'], [/\bснег|snow/, 'снег'],
   [/дожд|\brain/, 'дождь'], [/желт[а-я]* лист|листь|листопад|leaves/, 'листья'], [/кино|фильм|movie/, 'кино'],
   [/книг|читал|\bbook/, 'книги'], [/танц|dance/, 'танцы'], [/пицц|pizza/, 'пицца'], [/мороженое|ice cream/, 'мороженое'],
+];
+
+// weather words become the title's adjective: "Дождливый день дома наедине с собой"
+const WEATHER = [
+  ['rain', /дожд|ливен|ливн|\brain/, { m: 'Дождливый', f: 'Дождливая', n: 'Дождливое', pl: 'Дождливые' }],
+  ['snow', /\bснег|снегопад|снежн|метел|\bsnow/, { m: 'Снежный', f: 'Снежная', n: 'Снежное', pl: 'Снежные' }],
+  ['fog', /туман|\bfog/, { m: 'Туманный', f: 'Туманная', n: 'Туманное', pl: 'Туманные' }],
+  ['frost', /мороз|\bfrost/, { m: 'Морозный', f: 'Морозная', n: 'Морозное', pl: 'Морозные' }],
+  ['wind', /\bветер|\bветр|ветрен|\bwind/, { m: 'Ветреный', f: 'Ветреная', n: 'Ветреное', pl: 'Ветреные' }],
+  ['heat', /\bжар[аы]?\b|духот|\bhot\b/, { m: 'Жаркий', f: 'Жаркая', n: 'Жаркое', pl: 'Жаркие' }],
+  ['sun', /солнечн|солнце светил|\bsunny/, { m: 'Солнечный', f: 'Солнечная', n: 'Солнечное', pl: 'Солнечные' }],
 ];
 
 const MOOD_ADJ = {
@@ -90,6 +101,7 @@ MOOD.forEach((r) => { r[0] = fix(r[0]); });
 Object.values(SEASONS).forEach((s) => { s.re = fix(s.re); });
 TIMES.forEach((r) => { r[1] = fix(r[1]); });
 [PLACES, PEOPLE, OBJECTS].forEach((list) => list.forEach((r) => { r[0] = fix(r[0]); }));
+WEATHER.forEach((r) => { r[1] = fix(r[1]); });
 const NEG = fix(/\b(не|not|no)\s*$/);
 
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -126,8 +138,9 @@ export function analyzeText(raw, dateStr) {
   const objects = OBJECTS.filter(([re]) => re.test(t)).map(([, o]) => o);
   const deadline = /дедлайн|сдач|экзамен|deadline|exam/.test(t) ? (/экзамен|exam/.test(t) ? 'перед экзаменом' : 'перед сдачей') : null;
 
+  const weather = WEATHER.find(([, re]) => re.test(t))?.[0] || null;
   const facts = {
-    valence, arousal, tension, nostalgia, season, seasonFromText, timeOfDay, places, people, objects, deadline,
+    valence, arousal, tension, nostalgia, season, seasonFromText, timeOfDay, places, people, objects, deadline, weather,
     words: words.length, exclaim, hits: [...new Set(hits)],
   };
   facts.title = makeTitle(facts);
@@ -145,10 +158,12 @@ export function makeTitle(f) {
   const S = SEASONS[f.season];
   const time = (TIMES.find(([k]) => k === f.timeOfDay) || [null, null, { w: 'День', g: 'm' }])[2];
   const place = f.places[0], person = f.people[0], obj = f.objects.find((o) => o !== place?.nom);
-  const mood = MOOD_ADJ[moodKey(f)];
+  const W = WEATHER.find(([k]) => k === f.weather)?.[2];
+  const mood = W || MOOD_ADJ[moodKey(f)]; // weather is more concrete than mood, so it wins
+  const who = (p, loc) => (p === 'наедине с собой' ? [loc, p] : [p, loc]); // "дома наедине с собой", "с девушкой у пруда"
   let parts;
   if (f.deadline) parts = [f.timeOfDay ? time.w : 'День', place?.loc, f.deadline];
-  else if (place && person) parts = [time.w, f.seasonFromText ? S.adv : null, person, place.loc];
+  else if (place && person) parts = W ? [W[time.g], time.w.toLowerCase(), ...who(person, place.loc)] : [time.w, f.seasonFromText ? S.adv : null, ...who(person, place.loc)];
   else if (place && obj) parts = [cap(S.adj[place.g]), place.nom, 'и', obj];
   else if (place) parts = [mood[time.g], time.w.toLowerCase(), place.loc];
   else if (person && obj) parts = [cap(S.adj[time.g]), time.w.toLowerCase(), person, 'и', obj];

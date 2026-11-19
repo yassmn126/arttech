@@ -6,6 +6,7 @@ import { buildStyle } from './style-engine.js';
 import { MemoryRenderer } from './renderer.js';
 import { Player, voiceFor } from './player.js';
 import { esc, api } from './util.js';
+import { icon } from './icons.js';
 
 const genreSelect = (id) => `<select id="${id}">${GENRE_OPTIONS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`;
 
@@ -13,9 +14,13 @@ export async function renderCompose(view) {
   const days = await api('/api/days').catch(() => []);
   const dayNumber = days.length + 1;
   view.innerHTML = `
-  <div class="compose">
+  <div class="desk compose">
+   <section class="win">
+    <header class="titlebar"><span class="tt">Новый день</span><span class="tsub">запись</span>
+      <div class="wbtns"><a class="bv wb" href="#/" title="Закрыть" aria-label="Закрыть">${icon.close}</a></div></header>
+    <div class="wbody">
     <form novalidate>
-      <div><h1>Новый день</h1><p class="lede">Напишите, как прошёл день, приложите фото и песню. Система соберёт из этого страницу дневника и придумает ей название.</p></div>
+      <div><h1>Как прошёл день?</h1><p class="lede">Напишите, как прошёл день, приложите фото и песню. Система соберёт из этого страницу дневника и придумает ей название.</p></div>
       <fieldset><label class="label" for="date">Дата</label><input type="date" id="date" value="${new Date().toISOString().slice(0, 10)}"></fieldset>
       <fieldset><label class="label" for="text">Как прошёл день</label>
         <textarea id="text" placeholder="Гуляли по парку, всё в жёлтых листьях, было холодно, но мы пили какао и долго разговаривали"></textarea>
@@ -27,6 +32,7 @@ export async function renderCompose(view) {
         <div data-pane="search">
           <div class="row"><input type="text" id="q" placeholder="Исполнитель и название"><button type="button" id="qbtn" style="flex:0">Найти</button></div>
           <div class="results"></div>
+          <div class="row" id="syearRow" hidden><label class="hint" for="syear" style="flex:2">Год оригинала: самая ранняя версия песни в iTunes, можно поправить</label><input type="number" id="syear" min="1900" max="2030"></div>
           <span class="hint">Официальный 30-секундный фрагмент iTunes звучит при просмотре и анализируется на лету, но в папку не сохраняется.</span>
         </div>
         <div data-pane="link" hidden>
@@ -53,12 +59,17 @@ export async function renderCompose(view) {
       </div>
       <div class="status" id="status"></div>
     </form>
-    <div class="stage">
-      <div class="frame"><div class="placeholder">Здесь появится воспоминание дня: палитра из ваших фото, ритм из песни, форма из настроения текста.</div></div>
-      <div class="controls" hidden><button type="button" class="ghost play">▶ музыка</button></div>
-      <div class="player"></div>
+    </div>
+   </section>
+   <section class="win stagewin">
+    <header class="titlebar"><span class="tt">Предпросмотр</span><span class="tsub">4:5 · живое воспоминание</span></header>
+    <div class="wbody stage">
+      <div class="frame sunken"><div class="placeholder">Здесь появится воспоминание дня: палитра из ваших фото, ритм из песни, форма из настроения текста.</div></div>
+      <div class="controls" hidden><button type="button" class="bv play">▶ музыка</button></div>
+      <div class="cplayer"></div>
       <ul class="why"></ul>
     </div>
+   </section>
   </div>`;
 
   const $ = (s) => view.querySelector(s);
@@ -75,7 +86,7 @@ export async function renderCompose(view) {
 
   // song tabs
   view.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => {
-    tab = b.dataset.tab;
+    tab = b.dataset.tab; mstatus('');
     view.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b));
     view.querySelectorAll('[data-pane]').forEach((p) => { p.hidden = p.dataset.pane !== tab; });
   }));
@@ -85,11 +96,12 @@ export async function renderCompose(view) {
     mstatus('Ищу…');
     try {
       const list = await api(`/api/music/search?term=${encodeURIComponent(q)}`);
-      $('.results').innerHTML = list.map((t, i) => `<button type="button" class="result" data-i="${i}">${t.artwork ? `<img src="${t.artwork}" alt="">` : ''}<span>${esc(t.title)}<small>${esc(t.artist)} · ${esc(t.genre || '')} · ${t.year || ''}</small></span></button>`).join('') || '<span class="hint">Ничего не нашлось. Попробуйте вкладку «Ссылка».</span>';
+      $('.results').innerHTML = list.map((t, i) => `<button type="button" class="result" data-i="${i}">${t.artwork ? `<img src="${t.artwork}" alt="">` : ''}<span>${esc(t.title)}<small>${esc(t.artist)} · ${esc(t.genre || '')} · ${t.year || ''}${t.releaseYear && t.releaseYear !== t.year ? ` (издание ${t.releaseYear})` : ''}</small></span></button>`).join('') || '<span class="hint">Ничего не нашлось. Попробуйте вкладку «Ссылка».</span>';
       mstatus('');
       $('.results').querySelectorAll('.result').forEach((el) => (el.onclick = async () => {
         $('.results').querySelectorAll('.result').forEach((x) => x.classList.toggle('on', x === el));
         picked = { ...list[el.dataset.i], audio: null };
+        $('#syear').value = picked.year || ''; $('#syearRow').hidden = false;
         if (!picked.previewUrl) return mstatus('У трека нет фрагмента: оформление по жанру и году.');
         mstatus('Слушаю фрагмент: темп, энергия…');
         try { picked.audio = await analyzePreview(picked.previewUrl); mstatus(`Фрагмент: ${picked.audio.bpm} BPM, энергия ${Math.round(picked.audio.energy * 100)}%`); }
@@ -115,7 +127,7 @@ export async function renderCompose(view) {
 
   function currentSong() {
     const vibe = { tempo: $('#vtempo').value, mode: $('#vmode').value };
-    if (tab === 'search') return picked && { source: 'itunes', ...picked, vibe };
+    if (tab === 'search') return picked && { source: 'itunes', ...picked, year: Number($('#syear').value) || picked.year, vibe };
     if (tab === 'link') {
       const url = $('#url').value.trim(), title = $('#ltitle').value.trim(), artist = $('#lartist').value.trim();
       if (!url && !title) return null;
@@ -142,7 +154,7 @@ export async function renderCompose(view) {
     $('.frame').innerHTML = '<canvas></canvas>';
     renderer = await new MemoryRenderer($('.frame canvas'), { title: textF.title, date, text, photos: photos.map((p) => p.dataUrl), song, style, dayNumber }).load();
     renderer.start();
-    player = new Player(song, renderer); player.mount($('.player'));
+    player = new Player(song, renderer); player.mount($('.cplayer'));
     const ctl = $('.stage .controls'), pb = $('.play');
     ctl.hidden = !player.hasAudio;
     pb.onclick = async () => { player.playing ? player.pause() : (renderer.restart(), await player.play()); pb.textContent = player.playing ? '❚❚ пауза' : '▶ музыка'; };
@@ -169,7 +181,7 @@ export async function renderCompose(view) {
         text: built.text, title: renderer.day.title, date: built.date, photos: photos.map((p) => p.dataUrl), poster, song: songOut,
         analysis: { text: built.textF, photo: built.photoF, music: built.music }, style: built.style,
       }) });
-      location.hash = `#/day/${encodeURIComponent(entry.id)}`;
+      location.hash = `#/day/${encodeURIComponent(entry.id)}?play`;
     } catch (err) { status(`Не сохранилось: ${err.message}`); $('#save').disabled = false; }
   };
 

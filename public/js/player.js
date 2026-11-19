@@ -33,20 +33,27 @@ export class Player {
       const node = this.ctx.createMediaElementSource(this.audio);
       this.analyser = this.ctx.createAnalyser(); this.analyser.fftSize = 1024;
       node.connect(this.analyser).connect(this.ctx.destination);
-      const buf = new Float32Array(this.analyser.fftSize);
-      this.renderer.getLevel = () => {
-        if (!this.playing) return null;
-        this.analyser.getFloatTimeDomainData(buf);
-        let s = 0; for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
-        return Math.sqrt(s / buf.length) * 3;
-      };
+      this.buf = new Float32Array(this.analyser.fftSize);
     }
+    this.attach(this.renderer);
     await this.ctx.resume();
     await this.audio.play();
   }
 
+  // live loudness 0..~1 while the song plays, null otherwise
+  level() {
+    if (!this.playing || !this.analyser) return null;
+    this.analyser.getFloatTimeDomainData(this.buf);
+    let s = 0; for (let i = 0; i < this.buf.length; i++) s += this.buf[i] * this.buf[i];
+    return Math.sqrt(s / this.buf.length) * 3;
+  }
+
+  // the renderer can arrive after playback started (music first, art when ready)
+  attach(renderer) { this.renderer = renderer; if (renderer) renderer.getLevel = () => this.level(); }
+
   pause() { this.audio?.pause(); }
-  setVolume(v) { if (this.audio) this.audio.volume = v; }
+  setVolume(v) { if (this.audio) this.audio.volume = Math.max(0, Math.min(1, v)); }
+  get volume() { return this.audio ? this.audio.volume : 1; }
   destroy() { this.pause(); speechSynthesis.cancel(); this.ctx?.close(); if (this.renderer) this.renderer.getLevel = null; }
 }
 
@@ -64,7 +71,9 @@ export function speak(text, st, player) {
   const ru = speechSynthesis.getVoices().filter((x) => /^ru/i.test(x.lang));
   u.lang = 'ru-RU'; u.voice = ru.find((x) => /natural|online/i.test(x.name)) || ru[0] || null;
   u.rate = v.rate; u.pitch = v.pitch;
-  u.onstart = () => player?.setVolume(0.3); // duck the song under the voice
-  u.onend = u.onerror = () => player?.setVolume(1);
+  const vol = player?.volume ?? 1;
+  u.onstart = () => player?.setVolume(vol * 0.3); // duck the song under the voice, then restore it
+  u.onend = u.onerror = () => player?.setVolume(vol);
   speechSynthesis.speak(u);
+  return u;
 }

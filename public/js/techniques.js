@@ -15,14 +15,16 @@ export function drawCover(ctx, img, x, y, w, h, zoom = 1, px = 0, py = 0) {
   ctx.drawImage(img, Math.max(0, sx), Math.max(0, sy), Math.min(iw, sw), Math.min(ih, sh), x, y, w, h);
 }
 
+// Very light photos get a little contrast + colour back so they don't wash out (set per day in prepare()).
+let LIFT = '';
 function filtered(img, w, h, filter) {
   const c = canvas(w, h), x = c.getContext('2d');
-  x.filter = filter; drawCover(x, img, 0, 0, w, h, 1.06); return c;
+  x.filter = filter + LIFT; drawCover(x, img, 0, 0, w, h, 1.06); return c;
 }
 
 // --- Impression: painterly dabs sampled from the photo, oriented along light gradients ---
 function paintImpression(img, w, h, palette, R) {
-  const c = filtered(img, w, h, 'blur(4px) saturate(1.15) brightness(1.04)'), x = c.getContext('2d');
+  const c = filtered(img, w, h, 'blur(4px) saturate(1.35) brightness(1.05)'), x = c.getContext('2d');
   const sw = 160, sh = Math.round((sw * h) / w), s = canvas(sw, sh), sx = s.getContext('2d', { willReadFrequently: true });
   drawCover(sx, img, 0, 0, sw, sh, 1.06);
   const d = sx.getImageData(0, 0, sw, sh).data;
@@ -69,16 +71,17 @@ export function windowFor(tech, W, H, M) {
 export function prepare(tech, imgs, st, win, R) {
   const { w, h } = win, pal = st.palette;
   const props = { R2: rng(st.seed ^ 0x9e3779b9) };
+  LIFT = st.fused.light > 0.62 ? ' contrast(1.12) saturate(1.2)' : '';
   let layers;
   switch (tech) {
     case 'impression': layers = imgs.map((im) => paintImpression(im, w, h, pal, R)); break;
     case 'construct': layers = imgs.map((im, i) => colorize(im, w, h, pal[i % 3], st.darkPaper)); break;
-    case 'nocturne': layers = imgs.map((im) => filtered(im, w, h, `contrast(1.12) saturate(0.8) sepia(${0.15 + st.texture.grain * 0.5}) brightness(0.88)`));
+    case 'nocturne': layers = imgs.map((im) => filtered(im, w, h, `contrast(1.12) saturate(1.05) sepia(${0.08 + st.texture.grain * 0.3}) brightness(0.94)`));
       props.halo = layers.map((l) => { const c = canvas(w / 2, h / 2), x = c.getContext('2d'); x.filter = 'blur(10px) brightness(1.5) contrast(1.6)'; x.drawImage(l, 0, 0, w / 2, h / 2); return c; }); break;
-    case 'ma': layers = imgs.map((im) => filtered(im, w, h, 'saturate(0.55) contrast(0.92) brightness(1.06)')); break;
-    case 'field': layers = imgs.map((im) => filtered(im, w, h, 'blur(2px) grayscale(0.5)'));
+    case 'ma': layers = imgs.map((im) => filtered(im, w, h, 'saturate(0.9) contrast(1) brightness(1.06)')); break;
+    case 'field': layers = imgs.map((im) => filtered(im, w, h, 'blur(2px) grayscale(0.15) saturate(1.1)'));
       props.fields = [0, 1, 2].map((i) => { const c = canvas(w, h / 3 + 40), x = c.getContext('2d'); x.filter = 'blur(16px)'; x.fillStyle = pal[i % pal.length]; x.fillRect(30, 30, w - 60, h / 3 - 20); return c; }); break;
-    default: layers = imgs.map((im) => filtered(im, w, h, 'saturate(1.25) contrast(1.05)'));
+    default: layers = imgs.map((im) => filtered(im, w, h, 'saturate(1.35) contrast(1.06) brightness(1.03)'));
   }
   if (tech === 'construct') {
     const n = 7 + Math.round(st.fused.arousal * 9);

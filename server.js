@@ -5,13 +5,14 @@
 import http from 'node:http';
 import { promises as fs, createReadStream } from 'node:fs';
 import path from 'node:path';
-import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
-const ARCHIVE = path.join(ROOT, 'archive');
-const PORT = Number(process.env.PORT) || 5173;
+// node server.js [--port 5173] [--archive ./archive]   (or env PORT / GENESIS_ARCHIVE)
+const arg = (name) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : undefined; };
+const ARCHIVE = path.resolve(arg('archive') || process.env.GENESIS_ARCHIVE || path.join(ROOT, 'archive'));
+const PORT = Number(arg('port') || process.env.PORT) || 5173;
 const MAX_BODY = 80 * 1024 * 1024;
 const MAX_CLIP = 4 * 1024 * 1024; // ~30 s mono 22 kHz WAV is ~1.3 MB
 
@@ -65,7 +66,7 @@ function withUrls(entry) {
   return {
     ...entry,
     photoUrls: entry.photos.map((f) => fileUrl(entry.id, f)),
-    posterUrl: fileUrl(entry.id, entry.poster),
+    posterUrl: fileUrl(entry.id, entry.poster) + (entry.restyledAt ? `?v=${Date.parse(entry.restyledAt)}` : ''), // bust cache after a re-render
     clipUrl: entry.song?.clipFile ? fileUrl(entry.id, entry.song.clipFile) : null,
   };
 }
@@ -90,6 +91,18 @@ async function listDays() {
     } catch { /* folder without a valid entry: skip */ }
   }
   return days.sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+}
+
+// Re-render a saved day with the current visual rules: only the style and the poster change.
+// Text, photos, song, title and folder stay exactly as they were saved.
+async function restyleDay(id, body) {
+  const dir = path.join(ARCHIVE, id);
+  const entry = JSON.parse(await fs.readFile(path.join(dir, 'entry.json'), 'utf8'));
+  if (!body?.style?.technique || !Array.isArray(body.style.palette)) throw Object.assign(new Error('Нужен новый стиль'), { status: 400 });
+  await fs.writeFile(path.join(dir, entry.poster || 'memory.jpg'), decodeDataUrl(body.poster).buf);
+  const next = { ...entry, style: body.style, analysis: { ...entry.analysis, ...(body.analysis || {}) }, restyledAt: new Date().toISOString() };
+  await fs.writeFile(path.join(dir, 'entry.json'), JSON.stringify(next, null, 2));
+  return withUrls({ ...next, id });
 }
 
 async function createDay(body) {
@@ -131,37 +144,82 @@ async function createDay(body) {
   return withUrls({ ...entry, id });
 }
 
+// "Fly Me to the Moon (feat. …) - Remastered 2008" → "fly me to the moon"
+const songKey = (artist = '', title = '') => [artist.split(/\s+(?:&|feat\.?|ft\.?|and)\s+/i)[0], title]
+  .map((s) => s.toLowerCase().replace(/\s*[([].*?[)\]]/g, '').replace(/\s+-\s+.*$/, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim())
+  .join('|');
+
 async function musicSearch(term, res) {
-  const u = `https://itunes.apple.com/search?media=music&entity=song&limit=8&term=${encodeURIComponent(term)}`;
-  const r = await fetch(u);
+  if (!term.trim()) return json(res, 200, []);
+  // Ask for many versions: iTunes dates reissues/compilations by the reissue,
+  // so the song's real era is the earliest release among versions of the same song.
+  const u = `https://itunes.apple.com/search?media=music&entity=song&limit=50&term=${encodeURIComponent(term)}`;
+  const r = await fetch(u, { signal: AbortSignal.timeout(10000) });
   if (!r.ok) return json(res, 502, { error: 'iTunes search failed' });
-  const data = await r.json();
-  json(res, 200, (data.results || []).map((t) => ({
-    artist: t.artistName, title: t.trackName, album: t.collectionName, genre: t.primaryGenreName,
-    year: t.releaseDate ? Number(t.releaseDate.slice(0, 4)) : null, durationMs: t.trackTimeMillis,
-    artwork: t.artworkUrl100?.replace('100x100', '300x300'), previewUrl: t.previewUrl, url: t.trackViewUrl,
-    source: 'itunes',
-  })));
+  const all = ((await r.json()).results || []).filter((t) => t.kind === 'song');
+  const earliest = new Map();
+  for (const t of all) {
+    const y = Number(t.releaseDate?.slice(0, 4)), k = songKey(t.artistName, t.trackName);
+    if (y && !(earliest.get(k) <= y)) earliest.set(k, y);
+  }
+  const seen = new Set(), out = [];
+  for (const t of all) { // iTunes order = relevance; keep one row per song
+    const k = songKey(t.artistName, t.trackName);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const releaseYear = t.releaseDate ? Number(t.releaseDate.slice(0, 4)) : null;
+    out.push({
+      artist: t.artistName, title: t.trackName, album: t.collectionName, genre: t.primaryGenreName,
+      year: earliest.get(k) || releaseYear, releaseYear, durationMs: t.trackTimeMillis,
+      artwork: t.artworkUrl100?.replace('100x100', '300x300'), previewUrl: t.previewUrl, url: t.trackViewUrl,
+      source: 'itunes',
+    });
+    if (out.length === 8) break;
+  }
+  json(res, 200, out);
 }
 
-async function musicPreview(url, res) {
+// Byte ranges let the player's progress bar seek inside audio.
+function parseRange(header, size) {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header || '');
+  if (!m || (!m[1] && !m[2])) return null;
+  let start = m[1] ? Number(m[1]) : size - Number(m[2]), end = m[1] && m[2] ? Number(m[2]) : size - 1;
+  start = Math.max(0, start); end = Math.min(size - 1, end);
+  return start <= end ? { start, end } : null;
+}
+function sendRanged(req, res, size, type, body, extra = {}) {
+  const r = parseRange(req.headers.range, size);
+  const head = { 'Content-Type': type, 'Accept-Ranges': 'bytes', ...extra };
+  if (!r) { res.writeHead(200, { ...head, 'Content-Length': size }); return body(0, size - 1); }
+  res.writeHead(206, { ...head, 'Content-Length': r.end - r.start + 1, 'Content-Range': `bytes ${r.start}-${r.end}/${size}` });
+  return body(r.start, r.end);
+}
+
+// Official previews are held in memory only (a few, for seeking) and never written to disk.
+const previewCache = new Map();
+async function musicPreview(req, res, url) {
   let host;
   try { const p = new URL(url); host = p.hostname; if (p.protocol !== 'https:') throw 0; } catch { return json(res, 400, { error: 'bad url' }); }
   if (!/(\.apple\.com|\.mzstatic\.com)$/.test(host)) return json(res, 403, { error: 'only official Apple previews' });
-  const r = await fetch(url);
-  if (!r.ok || !r.body) return json(res, 502, { error: 'preview fetch failed' });
-  res.writeHead(200, { 'Content-Type': r.headers.get('content-type') || 'audio/mp4', 'Cache-Control': 'no-store' });
-  Readable.fromWeb(r.body).pipe(res);
+  let hit = previewCache.get(url);
+  if (!hit) {
+    const r = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    if (!r.ok) return json(res, 502, { error: 'preview fetch failed' });
+    hit = { buf: Buffer.from(await r.arrayBuffer()), type: r.headers.get('content-type') || 'audio/mp4' };
+    previewCache.set(url, hit);
+    if (previewCache.size > 6) previewCache.delete(previewCache.keys().next().value);
+  }
+  sendRanged(req, res, hit.buf.length, hit.type, (s, e) => res.end(hit.buf.subarray(s, e + 1)), { 'Cache-Control': 'no-store' });
 }
 
-async function serveFile(res, base, rel) {
+async function serveFile(req, res, base, rel) {
   const p = path.normalize(path.join(base, rel));
   if (!p.startsWith(base)) return json(res, 403, { error: 'forbidden' });
   try {
     const st = await fs.stat(p);
     if (!st.isFile()) throw 0;
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(p).toLowerCase()] || 'application/octet-stream', 'Content-Length': st.size });
-    createReadStream(p).pipe(res);
+    const type = MIME[path.extname(p).toLowerCase()] || 'application/octet-stream';
+    sendRanged(req, res, st.size, type, (s, e) => createReadStream(p, { start: s, end: e }).pipe(res));
   } catch { json(res, 404, { error: 'not found' }); }
 }
 
@@ -175,20 +233,28 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse((await readBody(req)).toString('utf8'));
       return json(res, 201, await createDay(body));
     }
+    if (p.startsWith('/api/days/') && p.endsWith('/restyle') && req.method === 'POST') {
+      const id = p.slice('/api/days/'.length, -'/restyle'.length);
+      if (!isSafeId(id) || !(await exists(path.join(ARCHIVE, id, 'entry.json')))) return json(res, 404, { error: 'not found' });
+      return json(res, 200, await restyleDay(id, JSON.parse((await readBody(req)).toString('utf8'))));
+    }
     if (p.startsWith('/api/days/') && req.method === 'GET') {
       const id = p.slice('/api/days/'.length);
       if (!isSafeId(id)) return json(res, 400, { error: 'bad id' });
       try { return json(res, 200, await readEntry(id)); } catch { return json(res, 404, { error: 'not found' }); }
     }
-    if (p === '/api/music/search') return musicSearch(url.searchParams.get('term') || '', res);
-    if (p === '/api/music/preview') return musicPreview(url.searchParams.get('url') || '', res);
-    if (p.startsWith('/archive/')) return serveFile(res, ARCHIVE, p.slice('/archive/'.length));
-    return serveFile(res, PUBLIC, p === '/' ? 'index.html' : p.slice(1));
+    // `return await` keeps rejections (e.g. an iTunes timeout) inside this try instead of crashing the process
+    if (p === '/api/music/search') return await musicSearch(url.searchParams.get('term') || '', res);
+    if (p === '/api/music/preview') return await musicPreview(req, res, url.searchParams.get('url') || '');
+    if (p.startsWith('/archive/')) return await serveFile(req, res, ARCHIVE, p.slice('/archive/'.length));
+    return await serveFile(req, res, PUBLIC, p === '/' ? 'index.html' : p.slice(1));
   } catch (err) {
-    console.error(err);
-    json(res, err.status || 500, { error: err.message || 'server error' });
+    const offline = err.name === 'TimeoutError' || err.cause?.code?.startsWith?.('UND_ERR') || err.message === 'fetch failed';
+    console.error(offline ? `network: ${err.cause?.code || err.name}` : err);
+    if (!res.headersSent) json(res, offline ? 504 : err.status || 500, { error: offline ? 'Музыкальный сервис недоступен (нет сети?)' : err.message || 'server error' });
+    else res.destroy();
   }
 });
 
 await fs.mkdir(ARCHIVE, { recursive: true });
-server.listen(PORT, '127.0.0.1', () => console.log(`Genesis diary → http://localhost:${PORT}`));
+server.listen(PORT, '127.0.0.1', () => console.log(`Genesis diary → http://localhost:${PORT}  (archive: ${ARCHIVE})`));
