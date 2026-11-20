@@ -6,14 +6,15 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 export { THREE };
 export const damp = THREE.MathUtils.damp;
 
-export function createStage(canvas, { fov = 30, exposure = 1.05 } = {}) {
+// envScene: optional () => THREE.Scene used for reflections instead of the bright studio room
+export function createStage(canvas, { fov = 30, exposure = 1.05, envScene = null } = {}) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.NeutralToneMapping; // keeps the art's colours true (ACES greys pastels out)
   renderer.toneMappingExposure = exposure;
   const scene = new THREE.Scene();
-  const pmrem = new THREE.PMREMGenerator(renderer), room = new RoomEnvironment();
+  const pmrem = new THREE.PMREMGenerator(renderer), room = envScene ? envScene() : new RoomEnvironment();
   const env = pmrem.fromScene(room, 0.035).texture;
   room.dispose?.();
   scene.environment = env;
@@ -95,18 +96,16 @@ export function labelTexture(img, paper = '#fff4f8') {
   return toTexture(c);
 }
 
-// Blank pastel CD-R with a plus, for "Записать новый день".
+// Blank night-iridescent CD-R with a plus, for "Записать новый день".
 export function blankLabel() {
   const S = 512, c = document.createElement('canvas'); c.width = c.height = S;
   const x = c.getContext('2d');
+  x.fillStyle = '#121429'; x.fillRect(0, 0, S, S);
   const g = x.createConicGradient ? x.createConicGradient(0.6, S / 2, S / 2) : null;
-  if (g) { ['#ffd6e8', '#d8ecff', '#fff3c4', '#d7f6e9', '#e9ddff', '#ffd6e8'].forEach((col, i, a) => g.addColorStop(i / (a.length - 1), col)); x.fillStyle = g; }
-  else x.fillStyle = '#ffe6f0';
-  x.fillRect(0, 0, S, S);
-  x.fillStyle = 'rgba(255,255,255,.55)'; x.fillRect(0, 0, S, S);
-  x.strokeStyle = '#2c2542'; x.lineWidth = 22; x.lineCap = 'round';
-  x.beginPath(); x.moveTo(S * 0.5, S * 0.69); x.lineTo(S * 0.5, S * 0.87); x.moveTo(S * 0.41, S * 0.78); x.lineTo(S * 0.59, S * 0.78); x.stroke();
-  x.fillStyle = '#2c2542'; x.font = '700 34px Comfortaa, Nunito, sans-serif'; x.textAlign = 'center';
+  if (g) { ['#3b2f8f', '#2f5d9a', '#7a3f8f', '#2e6f7a', '#4a3a9a', '#3b2f8f'].forEach((col, i, a) => g.addColorStop(i / (a.length - 1), col)); x.globalAlpha = 0.85; x.fillStyle = g; x.fillRect(0, 0, S, S); x.globalAlpha = 1; }
+  x.strokeStyle = '#f2f0ff'; x.lineWidth = 16; x.lineCap = 'round';
+  x.beginPath(); x.moveTo(S * 0.5, S * 0.7); x.lineTo(S * 0.5, S * 0.86); x.moveTo(S * 0.42, S * 0.78); x.lineTo(S * 0.58, S * 0.78); x.stroke();
+  x.fillStyle = '#f2f0ff'; x.font = '400 38px Prata, Georgia, serif'; x.textAlign = 'center';
   x.fillText('новый день', S / 2, S * 0.2);
   return toTexture(c);
 }

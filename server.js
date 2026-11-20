@@ -6,6 +6,7 @@ import http from 'node:http';
 import { promises as fs, createReadStream } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cleanStickers } from './public/js/stickers.js'; // same validation as the browser (pure module)
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -15,12 +16,14 @@ const ARCHIVE = path.resolve(arg('archive') || process.env.GENESIS_ARCHIVE || pa
 const PORT = Number(arg('port') || process.env.PORT) || 5173;
 const MAX_BODY = 80 * 1024 * 1024;
 const MAX_CLIP = 4 * 1024 * 1024; // ~30 s mono 22 kHz WAV is ~1.3 MB
+const FRAME_IDS = ['poster', 'polaroid', 'booth', 'film', 'scrapbook']; // photo presentation styles (public/js/frames.js)
+const frameOf = (f) => (FRAME_IDS.includes(f) ? f : 'poster');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-  '.png': 'image/png', '.svg': 'image/svg+xml', '.wav': 'audio/wav', '.ico': 'image/x-icon',
+  '.png': 'image/png', '.svg': 'image/svg+xml', '.wav': 'audio/wav', '.ico': 'image/x-icon', '.mp4': 'video/mp4',
 };
 
 const json = (res, code, obj) => {
@@ -66,8 +69,10 @@ function withUrls(entry) {
   return {
     ...entry,
     photoUrls: entry.photos.map((f) => fileUrl(entry.id, f)),
-    posterUrl: fileUrl(entry.id, entry.poster) + (entry.restyledAt ? `?v=${Date.parse(entry.restyledAt)}` : ''), // bust cache after a re-render
+    frame: frameOf(entry.frame),
+    posterUrl: fileUrl(entry.id, entry.poster) + ((entry.updatedAt || entry.restyledAt) ? `?v=${Date.parse(entry.updatedAt || entry.restyledAt)}` : ''), // bust cache after a re-render
     clipUrl: entry.song?.clipFile ? fileUrl(entry.id, entry.song.clipFile) : null,
+    videoUrl: entry.video?.file ? `${fileUrl(entry.id, entry.video.file)}?v=${Date.parse(entry.video.createdAt) || 0}` : null,
   };
 }
 
@@ -86,13 +91,47 @@ async function listDays() {
       days.push({
         id: e.id, title: e.title, date: e.date, createdAt: e.createdAt, posterUrl: e.posterUrl,
         technique: e.style?.technique, moodLabel: e.style?.moodLabel, palette: e.style?.palette?.slice(0, 5),
-        bpm: e.style?.rhythm?.bpm ?? null,
+        bpm: e.style?.rhythm?.bpm ?? null, frame: e.frame, hasVideo: Boolean(e.video),
         mood: e.style?.fused ? { valence: e.style.fused.valence, arousal: e.style.fused.arousal, tension: e.style.fused.tension } : null,
         song: e.song ? { artist: e.song.artist, title: e.song.title } : null,
       });
     } catch { /* folder without a valid entry: skip */ }
   }
   return days.sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+}
+
+// The exported memory video (rendered in the browser). Audio is the user's own clip or the synthesized day soundtrack,
+// never an iTunes preview — see public/js/soundtrack.js.
+async function saveVideo(id, buf, q) {
+  if (buf.length < 1024 || buf.subarray(4, 8).toString('latin1') !== 'ftyp') throw Object.assign(new Error('Это не MP4'), { status: 400 });
+  const dir = path.join(ARCHIVE, id), entry = JSON.parse(await fs.readFile(path.join(dir, 'entry.json'), 'utf8'));
+  await fs.writeFile(path.join(dir, 'memory.mp4'), buf);
+  const video = { file: 'memory.mp4', seconds: Number(q.get('seconds')) || null, audio: ['clip', 'synth', 'none'].includes(q.get('audio')) ? q.get('audio') : 'synth',
+    frame: frameOf(q.get('frame')), codecs: String(q.get('codecs') || '').slice(0, 40), bytes: buf.length, createdAt: new Date().toISOString() };
+  await fs.writeFile(path.join(dir, 'entry.json'), JSON.stringify({ ...entry, video }, null, 2));
+  return withUrls({ ...entry, video, id });
+}
+
+// Switch a day's photo frame style: saves the choice and the re-rendered card (memory.jpg). Nothing else changes.
+// Optional Y2K stickers on the card (max 3): saves them and the re-rendered card (memory.jpg). Nothing else changes.
+async function setDayStickers(id, body) {
+  const dir = path.join(ARCHIVE, id);
+  const entry = JSON.parse(await fs.readFile(path.join(dir, 'entry.json'), 'utf8'));
+  if (!Array.isArray(body?.stickers)) throw Object.assign(new Error('Нужен список стикеров'), { status: 400 });
+  await fs.writeFile(path.join(dir, entry.poster || 'memory.jpg'), decodeDataUrl(body.poster).buf);
+  const next = { ...entry, stickers: cleanStickers(body.stickers), updatedAt: new Date().toISOString() };
+  await fs.writeFile(path.join(dir, 'entry.json'), JSON.stringify(next, null, 2));
+  return withUrls({ ...next, id });
+}
+
+async function setDayFrame(id, body) {
+  const dir = path.join(ARCHIVE, id);
+  const entry = JSON.parse(await fs.readFile(path.join(dir, 'entry.json'), 'utf8'));
+  if (!FRAME_IDS.includes(body?.frame)) throw Object.assign(new Error('Неизвестный стиль фото'), { status: 400 });
+  await fs.writeFile(path.join(dir, entry.poster || 'memory.jpg'), decodeDataUrl(body.poster).buf);
+  const next = { ...entry, frame: body.frame, updatedAt: new Date().toISOString() };
+  await fs.writeFile(path.join(dir, 'entry.json'), JSON.stringify(next, null, 2));
+  return withUrls({ ...next, id });
 }
 
 // Re-render a saved day with the current visual rules: only the style and the poster change.
@@ -102,13 +141,14 @@ async function restyleDay(id, body) {
   const entry = JSON.parse(await fs.readFile(path.join(dir, 'entry.json'), 'utf8'));
   if (!body?.style?.technique || !Array.isArray(body.style.palette)) throw Object.assign(new Error('Нужен новый стиль'), { status: 400 });
   await fs.writeFile(path.join(dir, entry.poster || 'memory.jpg'), decodeDataUrl(body.poster).buf);
-  const next = { ...entry, style: body.style, analysis: { ...entry.analysis, ...(body.analysis || {}) }, restyledAt: new Date().toISOString() };
+  const now = new Date().toISOString();
+  const next = { ...entry, style: body.style, analysis: { ...entry.analysis, ...(body.analysis || {}) }, restyledAt: now, updatedAt: now };
   await fs.writeFile(path.join(dir, 'entry.json'), JSON.stringify(next, null, 2));
   return withUrls({ ...next, id });
 }
 
 async function createDay(body) {
-  const { text, title, date, photos, poster, song, analysis, style } = body;
+  const { text, title, date, photos, poster, song, analysis, style, frame } = body;
   if (!text?.trim()) throw Object.assign(new Error('Нужен текст о дне'), { status: 400 });
   if (!Array.isArray(photos) || !photos.length) throw Object.assign(new Error('Нужно хотя бы одно фото'), { status: 400 });
   if (!song || (!song.title && !song.url && !song.clip)) throw Object.assign(new Error('Нужна песня'), { status: 400 });
@@ -138,7 +178,7 @@ async function createDay(body) {
   await fs.writeFile(path.join(dir, 'song.json'), JSON.stringify(songMeta, null, 2));
 
   const entry = {
-    version: 1, title: safeName(title), date: day, createdAt: new Date().toISOString(),
+    version: 1, title: safeName(title), date: day, createdAt: new Date().toISOString(), frame: frameOf(frame),
     text: text.trim(), photos: photoFiles, poster: 'memory.jpg', song: songMeta, analysis, style,
   };
   await fs.writeFile(path.join(dir, 'entry.txt'), `${entry.title}\n${day}\n\n${entry.text}\n`);
@@ -234,6 +274,21 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/days' && req.method === 'POST') {
       const body = JSON.parse((await readBody(req)).toString('utf8'));
       return json(res, 201, await createDay(body));
+    }
+    if (p.startsWith('/api/days/') && p.endsWith('/video') && req.method === 'POST') {
+      const id = p.slice('/api/days/'.length, -'/video'.length);
+      if (!isSafeId(id) || !(await exists(path.join(ARCHIVE, id, 'entry.json')))) return json(res, 404, { error: 'not found' });
+      return json(res, 200, await saveVideo(id, await readBody(req), url.searchParams));
+    }
+    if (p.startsWith('/api/days/') && p.endsWith('/stickers') && req.method === 'POST') {
+      const id = p.slice('/api/days/'.length, -'/stickers'.length);
+      if (!isSafeId(id) || !(await exists(path.join(ARCHIVE, id, 'entry.json')))) return json(res, 404, { error: 'not found' });
+      return json(res, 200, await setDayStickers(id, JSON.parse((await readBody(req)).toString('utf8'))));
+    }
+    if (p.startsWith('/api/days/') && p.endsWith('/frame') && req.method === 'POST') {
+      const id = p.slice('/api/days/'.length, -'/frame'.length);
+      if (!isSafeId(id) || !(await exists(path.join(ARCHIVE, id, 'entry.json')))) return json(res, 404, { error: 'not found' });
+      return json(res, 200, await setDayFrame(id, JSON.parse((await readBody(req)).toString('utf8'))));
     }
     if (p.startsWith('/api/days/') && p.endsWith('/restyle') && req.method === 'POST') {
       const id = p.slice('/api/days/'.length, -'/restyle'.length);

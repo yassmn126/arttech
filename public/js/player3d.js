@@ -1,250 +1,242 @@
-// Landscape Y2K pearl CD player. Transparent top-hinged lid, iridescent disc that spins one turn per bar,
-// green LCD (play state, date, title, seek line, BPM, mood, live levels), paper-tape mood & weather badges,
-// glossy keys (prev/play/next/♥/★) and big «Архив» / «+ Новый день» buttons — all clickable via raycasting.
-import { THREE, damp, createStage, makeDisc, labelTexture, blankLabel, loadImage, pastel } from './three-kit.js';
+// Sleek dark-metal CD player. Polished chrome shell around a brushed-graphite face, a smoked transparent lid on a
+// top hinge, the day's iridescent disc (one turn per bar), a luminous progress ring around the well (click = seek),
+// a silver knurled volume dial and glowing ⏮ ▶ ⏭ ↻ keys — all clickable via raycasting.
+// API (used by home.js): setDay, setPlaying, setVolume, setPoster, lcd, press, dispose.
+import { THREE, damp, createStage, makeDisc, labelTexture, blankLabel, loadImage } from './three-kit.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { MOODS } from './util.js';
 
-const BW = 6.8, BH = 4.6, BD = 0.8, FZ = BD / 2;
-const WELL = { x: -1.62, y: 0.2, r: 1.55 };
-const LCD = { x: 1.75, y: 1.05, w: 2.66, h: 1.28 };
-const INK = '#5d4d82', MONO = '"JetBrains Mono", monospace', UI = 'Nunito, sans-serif';
+const BW = 5.7, BH = 6.0, BD = 0.6, FZ = BD / 2 + 0.03; // FZ = front of the graphite face
+const WELL = { x: 0, y: 0.5, r: 1.95 };
+const RING = { r0: WELL.r + 0.1, r1: WELL.r + 0.24 };
+const KY = -2.27, TILT = -0.3, TAU = Math.PI * 2;
+const DISPLAY = 'Prata, Georgia, serif', UI = 'Manrope, "Segoe UI", sans-serif';
 const easeOutBack = (t) => 1 + 2.2 * (t - 1) ** 3 + 1.2 * (t - 1) ** 2;
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
 function tex(w, h, draw) {
   const c = document.createElement('canvas'); c.width = w; c.height = h;
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; t.userData.canvas = c;
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; t.userData.canvas = c;
   if (draw) redraw(t, draw);
   return t;
 }
 function redraw(t, draw) { const c = t.userData.canvas, x = c.getContext('2d'); x.clearRect(0, 0, c.width, c.height); draw(x, c.width, c.height); t.needsUpdate = true; }
-function fitFont(x, txt, weight, size, family, maxW) { let s = size; do { x.font = `${weight} ${s}px ${family}`; s -= 2; } while (x.measureText(txt).width > maxW && s > 14); }
+const rand = (seed) => () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 
-// ---- little canvas drawings ----
-function star(x, cx, cy, r, fill = '#ffd84d') {
-  x.beginPath();
-  for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + (i * Math.PI) / 5, rr = i % 2 ? r * 0.45 : r; x.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr); }
-  x.closePath(); x.fillStyle = fill; x.fill(); x.lineWidth = r * 0.12; x.strokeStyle = '#e8a42a'; x.stroke();
+// brushed metal: fine horizontal grain for the face, concentric (spun) grain for the disc well and the dial cap
+function brushed(concentric) {
+  return tex(1024, 1024, (x, w, h) => {
+    const r = rand(concentric ? 11 : 5);
+    x.fillStyle = '#8a8d98'; x.fillRect(0, 0, w, h);
+    if (concentric) {
+      for (let rad = 1; rad < w * 0.71; rad += 1.25) { const v = (96 + r() * 90) | 0; x.strokeStyle = `rgba(${v},${v},${v + 8},${0.25 + r() * 0.4})`; x.lineWidth = 1.1; x.beginPath(); x.arc(w / 2, h / 2, rad, 0, TAU); x.stroke(); }
+    } else {
+      for (let y = 0; y < h; y++) { const v = (90 + r() * 90) | 0; x.fillStyle = `rgba(${v},${v},${v + 10},${0.2 + r() * 0.45})`; x.fillRect(0, y, w, 1); }
+      for (let i = 0; i < 2600; i++) { const v = r() > 0.5 ? 220 : 40; x.fillStyle = `rgba(${v},${v},${v},${r() * 0.12})`; x.fillRect(r() * w, r() * h, 40 + r() * 260, 1); }
+    }
+  });
 }
-function heart(x, cx, cy, s, fill) {
-  x.beginPath(); x.moveTo(cx, cy + s * 0.75);
-  x.bezierCurveTo(cx - s * 1.3, cy - s * 0.1, cx - s * 0.6, cy - s * 1.05, cx, cy - s * 0.35);
-  x.bezierCurveTo(cx + s * 0.6, cy - s * 1.05, cx + s * 1.3, cy - s * 0.1, cx, cy + s * 0.75);
-  x.fillStyle = fill; x.fill();
+// knurled grip around the VOL dial
+function knurl() {
+  const t = tex(1024, 64, (x, w, h) => {
+    const g = x.createLinearGradient(0, 0, 0, h); g.addColorStop(0, '#f2f3f8'); g.addColorStop(0.5, '#b9bcc8'); g.addColorStop(1, '#eceef4'); x.fillStyle = g; x.fillRect(0, 0, w, h);
+    for (let i = 0; i < w; i += 8) { x.fillStyle = 'rgba(40,44,60,.35)'; x.fillRect(i, 0, 3, h); x.fillStyle = 'rgba(255,255,255,.6)'; x.fillRect(i + 3, 0, 1, h); }
+  });
+  return t;
 }
-function glyph(x, kind, s, color) {
-  x.fillStyle = color; x.strokeStyle = color; x.lineJoin = 'round'; x.lineCap = 'round';
-  const tri = (pts) => { x.beginPath(); pts.forEach(([a, b], i) => (i ? x.lineTo(a * s, b * s) : x.moveTo(a * s, b * s))); x.closePath(); x.fill(); };
-  if (kind === 'play') tri([[0.38, 0.27], [0.74, 0.5], [0.38, 0.73]]);
-  if (kind === 'pause') { x.fillRect(0.33 * s, 0.28 * s, 0.11 * s, 0.44 * s); x.fillRect(0.56 * s, 0.28 * s, 0.11 * s, 0.44 * s); }
-  if (kind === 'prev') { x.fillRect(0.26 * s, 0.28 * s, 0.08 * s, 0.44 * s); tri([[0.74, 0.28], [0.38, 0.5], [0.74, 0.72]]); }
-  if (kind === 'next') { x.fillRect(0.66 * s, 0.28 * s, 0.08 * s, 0.44 * s); tri([[0.26, 0.28], [0.62, 0.5], [0.26, 0.72]]); }
-  if (kind === 'heart') heart(x, 0.5 * s, 0.5 * s, 0.26 * s, color);
-  if (kind === 'star') star(x, 0.5 * s, 0.52 * s, 0.3 * s, color);
+
+// luminous key glyphs (white core + soft glow in the day's accent)
+function glyph(x, kind, s, glow) {
+  const draw = () => {
+    x.fillStyle = '#f7f6ff'; x.strokeStyle = '#f7f6ff'; x.lineJoin = 'round'; x.lineCap = 'round';
+    const tri = (pts) => { x.beginPath(); pts.forEach(([a, b], i) => (i ? x.lineTo(a * s, b * s) : x.moveTo(a * s, b * s))); x.closePath(); x.lineWidth = s * 0.05; x.fill(); x.stroke(); };
+    const bar = (a, w = 0.075) => { x.beginPath(); x.roundRect(a * s, 0.31 * s, w * s, 0.38 * s, w * s * 0.4); x.fill(); };
+    if (kind === 'play') tri([[0.41, 0.3], [0.72, 0.5], [0.41, 0.7]]);
+    if (kind === 'pause') { bar(0.36, 0.1); bar(0.54, 0.1); }
+    if (kind === 'prev') { bar(0.3); tri([[0.7, 0.32], [0.42, 0.5], [0.7, 0.68]]); }
+    if (kind === 'next') { bar(0.625); tri([[0.3, 0.32], [0.58, 0.5], [0.3, 0.68]]); }
+    if (kind === 'repeat') {
+      x.lineWidth = s * 0.055; x.beginPath(); x.arc(0.5 * s, 0.5 * s, 0.2 * s, -0.25 * Math.PI, 1.55 * Math.PI); x.stroke();
+      tri([[0.6, 0.24], [0.72, 0.36], [0.56, 0.4]]);
+    }
+  };
+  x.save(); x.shadowColor = glow; x.shadowBlur = s * 0.09; draw(); x.shadowBlur = s * 0.03; x.shadowColor = '#ffffff'; draw(); x.restore();
 }
-function face(x, cx, cy, r, i, on) {
-  x.save();
-  if (on) { x.shadowColor = '#ffd84d'; x.shadowBlur = 28; }
-  x.beginPath(); x.arc(cx, cy, r, 0, 7); x.fillStyle = on ? '#ffe46b' : '#fffdf8'; x.fill();
-  x.shadowBlur = 0; x.lineWidth = r * 0.09; x.strokeStyle = '#6b5a86'; x.stroke();
-  x.fillStyle = '#4a3d63';
-  if (i === 4 && on) { star(x, cx - r * 0.35, cy - r * 0.18, r * 0.22, '#ff8fc3'); star(x, cx + r * 0.35, cy - r * 0.18, r * 0.22, '#ff8fc3'); }
-  else { x.beginPath(); x.arc(cx - r * 0.33, cy - r * 0.15, r * 0.1, 0, 7); x.arc(cx + r * 0.33, cy - r * 0.15, r * 0.1, 0, 7); x.fill(); }
-  x.beginPath(); x.lineWidth = r * 0.09;
-  const my = cy + r * 0.32, curve = [-0.3, -0.08, 0, 0.18, 0.32][i];
-  if (i === 4) { x.moveTo(cx - r * 0.4, my - r * 0.05); x.quadraticCurveTo(cx, my + r * 0.5, cx + r * 0.4, my - r * 0.05); x.closePath(); x.fillStyle = '#c2457f'; x.fill(); }
-  else { x.moveTo(cx - r * 0.32, my); x.quadraticCurveTo(cx, my + curve * r * 2, cx + r * 0.32, my); x.stroke(); }
-  if (on) { x.fillStyle = 'rgba(255,143,195,.55)'; x.beginPath(); x.ellipse(cx - r * 0.58, cy + r * 0.2, r * 0.16, r * 0.1, 0, 0, 7); x.ellipse(cx + r * 0.58, cy + r * 0.2, r * 0.16, r * 0.1, 0, 0, 7); x.fill(); }
-  x.restore();
-}
-function weatherIcon(x, kind, cx, cy, s) {
-  const sun = (col) => { x.fillStyle = col; x.beginPath(); x.arc(cx, cy, s * 0.42, 0, 7); x.fill(); x.strokeStyle = col; x.lineWidth = s * 0.1; x.lineCap = 'round';
-    for (let i = 0; i < 8; i++) { const a = (i * Math.PI) / 4; x.beginPath(); x.moveTo(cx + Math.cos(a) * s * 0.6, cy + Math.sin(a) * s * 0.6); x.lineTo(cx + Math.cos(a) * s * 0.85, cy + Math.sin(a) * s * 0.85); x.stroke(); } };
-  const cloud = () => { x.fillStyle = '#dfe6f7'; x.strokeStyle = '#8f9cc4'; x.lineWidth = s * 0.06; x.beginPath(); x.arc(cx - s * 0.3, cy, s * 0.32, Math.PI * 0.5, Math.PI * 1.5); x.arc(cx + s * 0.05, cy - s * 0.2, s * 0.42, Math.PI, 0); x.arc(cx + s * 0.42, cy + s * 0.02, s * 0.3, Math.PI * 1.5, Math.PI * 0.5); x.closePath(); x.fill(); x.stroke(); };
-  const flake = (fx, fy, r) => { x.strokeStyle = '#7fb4ea'; x.lineWidth = s * 0.07; for (let i = 0; i < 3; i++) { const a = (i * Math.PI) / 3; x.beginPath(); x.moveTo(fx - Math.cos(a) * r, fy - Math.sin(a) * r); x.lineTo(fx + Math.cos(a) * r, fy + Math.sin(a) * r); x.stroke(); } };
-  if (kind === 'rain') { cloud(); x.strokeStyle = '#6aa5e6'; x.lineWidth = s * 0.08; for (let i = -1; i <= 1; i++) { x.beginPath(); x.moveTo(cx + i * s * 0.3, cy + s * 0.45); x.lineTo(cx + i * s * 0.3 - s * 0.1, cy + s * 0.75); x.stroke(); } }
-  else if (kind === 'snow' || kind === 'frost' || kind === 'winter') { if (kind === 'snow') { cloud(); flake(cx - s * 0.25, cy + s * 0.62, s * 0.14); flake(cx + s * 0.25, cy + s * 0.62, s * 0.14); } else flake(cx, cy, s * 0.7); }
-  else if (kind === 'fog' || kind === 'wind') { x.strokeStyle = '#8f9cc4'; x.lineWidth = s * 0.1; x.lineCap = 'round'; for (let i = -1; i <= 1; i++) { x.beginPath(); x.moveTo(cx - s * 0.7, cy + i * s * 0.32); x.quadraticCurveTo(cx, cy + i * s * 0.32 - (kind === 'wind' ? s * 0.2 : 0), cx + s * 0.7, cy + i * s * 0.32); x.stroke(); } }
-  else if (kind === 'night') { x.fillStyle = '#ffd84d'; x.beginPath(); x.arc(cx, cy, s * 0.6, 0, 7); x.fill(); x.globalCompositeOperation = 'destination-out'; x.beginPath(); x.arc(cx + s * 0.28, cy - s * 0.2, s * 0.5, 0, 7); x.fill(); x.globalCompositeOperation = 'source-over'; }
-  else if (kind === 'autumn') { x.fillStyle = '#f29a3d'; x.beginPath(); x.ellipse(cx, cy, s * 0.36, s * 0.66, 0.7, 0, 7); x.fill(); x.strokeStyle = '#b8611d'; x.lineWidth = s * 0.06; x.beginPath(); x.moveTo(cx - s * 0.45, cy + s * 0.45); x.lineTo(cx + s * 0.35, cy - s * 0.4); x.stroke(); }
-  else if (kind === 'spring') { x.fillStyle = '#ff9fcb'; for (let i = 0; i < 5; i++) { const a = (i * 2 * Math.PI) / 5; x.beginPath(); x.arc(cx + Math.cos(a) * s * 0.34, cy + Math.sin(a) * s * 0.34, s * 0.3, 0, 7); x.fill(); } x.fillStyle = '#ffd84d'; x.beginPath(); x.arc(cx, cy, s * 0.22, 0, 7); x.fill(); }
-  else sun(kind === 'heat' ? '#ff9a4d' : '#ffc93c');
-}
-function tape(x, X, Y, W, H, col, rot) {
-  x.save(); x.translate(X + W / 2, Y + H / 2); x.rotate(rot); x.globalAlpha = 0.9; x.fillStyle = col; x.fillRect(-W / 2, -H / 2, W, H);
-  x.globalAlpha = 0.35; x.fillStyle = '#fff'; for (let i = -W / 2; i < W / 2; i += 22) x.fillRect(i, -H / 2, 10, H); x.restore();
+
+// reflections: a dark night studio with a few softbox strips placed off the face's mirror angle,
+// so chrome edges and the disc catch light while the graphite face stays deep
+function nightStudio() {
+  const s = new THREE.Scene(), box = new THREE.BoxGeometry(1, 1, 1), mats = [];
+  s.background = new THREE.Color(0x05060c);
+  const strip = (color, power, pos, scale) => {
+    const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(power) }); mats.push(m);
+    const o = new THREE.Mesh(box, m); o.position.set(...pos); o.scale.set(...scale); s.add(o);
+  };
+  strip(0xffffff, 5, [0, 16, -8], [16, 0.2, 7]);      // overhead softbox, behind the player: top bevels glint
+  strip(0xe4e9ff, 6, [-13, 5, 3], [0.2, 12, 2.2]);    // tall strip on the left
+  strip(0xfff3ea, 4, [13, 6, -3], [0.2, 12, 2.2]);    // tall strip on the right
+  strip(0xa9b8ff, 0.7, [0, 9, 13], [18, 6, 0.2]);     // faint front-top wash: the face and keys get a soft sheen, never a flash
+  strip(0x8a7dff, 1.2, [0, -10, 6], [20, 0.2, 10]);   // violet floor bounce
+  s.dispose = () => { box.dispose(); mats.forEach((m) => m.dispose()); };
+  return s;
 }
 
 export async function createPlayer3D(canvas, { onAction }) {
-  await Promise.allSettled(['700 60px "JetBrains Mono"', '800 40px Nunito', '900 40px Nunito', '400 60px Pacifico'].map((f) => document.fonts.load(f, 'Ая')));
-  const { renderer, scene, camera, key, dispose } = createStage(canvas, { fov: 24 });
+  await Promise.allSettled(['400 60px Prata', '700 40px Manrope'].map((f) => document.fonts.load(f, 'genesis ЗВУК')));
+  const { renderer, scene, camera, key, dispose } = createStage(canvas, { fov: 24, exposure: 1.05, envScene: nightStudio });
+  scene.traverse((o) => { if (o.isHemisphereLight) o.intensity = 0.32; });
+  key.intensity = 1.1;
   const rig = new THREE.Group(); scene.add(rig);
-  let tint = pastel('#d9c8ff', 0.5);
-  const pearl = new THREE.MeshPhysicalMaterial({ color: 0xf0e9f6, envMapIntensity: 1.15, roughness: 0.26, metalness: 0.04, clearcoat: 1, clearcoatRoughness: 0.1, iridescence: 0.55, iridescenceIOR: 1.4, iridescenceThicknessRange: [300, 900], sheen: 0.6, sheenColor: tint.clone() });
-  const pearlDeep = new THREE.MeshPhysicalMaterial({ color: 0xeae2f3, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.15, iridescence: 0.4, sheen: 0.5, sheenColor: tint.clone() });
-  const chrome = new THREE.MeshPhysicalMaterial({ color: 0xf3f1f8, metalness: 1, roughness: 0.12, clearcoat: 1 });
+  let accent = new THREE.Color('#b7a6ff'), accentCss = '#b7a6ff';
+
+  // mood-coloured light from below (the "floor glow") + a cool rim light from the upper left
+  const under = new THREE.PointLight(accent.clone(), 28, 12, 2); under.position.set(0, -4.2, 2.6); scene.add(under);
+  const rimLight = new THREE.PointLight(0xa9c2ff, 20, 14, 2); rimLight.position.set(-4.5, 4, 3); scene.add(rimLight);
+
+  const chrome = new THREE.MeshPhysicalMaterial({ color: 0xdfe2ea, metalness: 1, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 1.3 });
+  const shell = new THREE.MeshPhysicalMaterial({ color: 0xa3a8b8, metalness: 1, roughness: 0.18, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 1.15 });
+  const graphite = new THREE.MeshPhysicalMaterial({ color: 0x3a3d49, map: brushed(false), metalness: 0.88, roughness: 0.42, clearcoat: 0.35, clearcoatRoughness: 0.32, envMapIntensity: 0.62 });
+  const spun = brushed(true);
+  const keyGlass = new THREE.MeshPhysicalMaterial({ color: 0x181a24, metalness: 0.45, roughness: 0.14, clearcoat: 1, clearcoatRoughness: 0.04, envMapIntensity: 1.2 });
+  const glowMat = new THREE.MeshBasicMaterial({ color: accent.clone(), toneMapped: false, transparent: true, opacity: 0.85 });
   const clickables = [];
   const act = (o, name) => { o.userData.act = name; o.userData.press = 0; o.userData.hover = 0; o.userData.baseZ = o.position.z; clickables.push(o); return o; };
   const at = (o, x, y, z) => { o.position.set(x, y, z); rig.add(o); return o; };
-  const decal = (w, h, map, opts = {}) => new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshPhysicalMaterial({ map, transparent: true, roughness: 0.4, clearcoat: 0.5, ...opts }));
+  const glowPlane = (w, h, map, opacity = 1) => new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map, transparent: true, opacity, toneMapped: false, depthWrite: false }));
 
-  // body, hinge housing, engraved logo, "CD PLAYER"
-  at(new THREE.Mesh(new RoundedBoxGeometry(BW, BH, BD, 8, 0.55), pearl), 0, 0, 0);
-  at(new THREE.Mesh(new RoundedBoxGeometry(0.9, 0.34, 0.26, 4, 0.12), pearlDeep), -1.25, WELL.y + WELL.r + 0.2, FZ + 0.06);
-  at(decal(1.35, 0.42, tex(512, 160, (x, w, h) => {
-    x.font = '400 92px Pacifico, cursive'; x.textBaseline = 'middle';
-    const g = x.createLinearGradient(0, 20, 0, 140); g.addColorStop(0, '#efe3ff'); g.addColorStop(1, '#b896f2');
-    x.lineWidth = 10; x.strokeStyle = 'rgba(160,130,220,.55)'; x.strokeText('genesis', 24, 82); x.fillStyle = g; x.fillText('genesis', 24, 78);
-    star(x, 470, 46, 20, '#fff6c9');
-  })), -2.62, 1.98, FZ + 0.004);
-  at(decal(1.5, 0.3, tex(512, 100, (x, w, h) => {
-    x.font = '900 46px Nunito, sans-serif'; x.fillStyle = '#9c93b3'; x.letterSpacing = '5px'; x.textBaseline = 'middle'; x.fillText('CD PLAYER', 8, 52);
-    const g = x.createConicGradient(0, 455, 50); ['#f6e3ff', '#d4f1ff', '#fff6c9', '#ffd9ec', '#f6e3ff'].forEach((c, i, a) => g.addColorStop(i / (a.length - 1), c));
-    x.fillStyle = g; x.beginPath(); x.arc(455, 50, 36, 0, 7); x.fill(); x.fillStyle = '#fff'; x.beginPath(); x.arc(455, 50, 9, 0, 7); x.fill(); x.strokeStyle = '#c9bfe0'; x.lineWidth = 3; x.stroke();
-  })), 2.3, 1.98, FZ + 0.004);
+  // chrome shell + brushed graphite face + luminous strips along the bottom edge
+  at(new THREE.Mesh(new RoundedBoxGeometry(BW, BH, BD, 10, 0.62), shell), 0, 0, 0);
+  at(new THREE.Mesh(new RoundedBoxGeometry(BW - 0.24, BH - 0.24, 0.12, 8, 0.52), graphite), 0, 0, BD / 2 - 0.03);
+  [-1.45, 1.45].forEach((x) => at(new THREE.Mesh(new RoundedBoxGeometry(1.15, 0.07, 0.1, 2, 0.03), glowMat), x, -BH / 2 + 0.035, BD / 2 - 0.08));
 
-  // disc well + chrome ring + spindle + the day's disc + top-hinged transparent lid
-  const wellMat = new THREE.MeshPhysicalMaterial({ color: 0xe4dcef, roughness: 0.45, clearcoat: 0.6 });
-  at(new THREE.Mesh(new THREE.CircleGeometry(WELL.r, 96), wellMat), WELL.x, WELL.y, FZ + 0.004);
-  at(new THREE.Mesh(new THREE.TorusGeometry(WELL.r + 0.03, 0.06, 20, 128), chrome), WELL.x, WELL.y, FZ + 0.02);
-  const spindle = at(new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.14, 32), chrome), WELL.x, WELL.y, FZ + 0.07); spindle.rotation.x = Math.PI / 2;
+  // disc well (spun metal) + chrome lip + glowing progress ring + spindle
+  at(new THREE.Mesh(new THREE.CircleGeometry(WELL.r, 160), new THREE.MeshPhysicalMaterial({ color: 0x2b2e38, map: spun, metalness: 0.9, roughness: 0.3, clearcoat: 0.5, envMapIntensity: 0.8 })), WELL.x, WELL.y, FZ + 0.002);
+  at(new THREE.Mesh(new THREE.TorusGeometry(WELL.r + 0.02, 0.045, 20, 180), chrome), WELL.x, WELL.y, FZ + 0.02);
+  const ringTex = tex(768, 768);
+  const ring = at(new THREE.Mesh(new THREE.RingGeometry(RING.r0, RING.r1, 200, 1), new THREE.MeshBasicMaterial({ map: ringTex, transparent: true, toneMapped: false, depthWrite: false })), WELL.x, WELL.y, FZ + 0.006);
+  act(ring, 'lcd');
+  const spindle = at(new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.14, 40), chrome), WELL.x, WELL.y, FZ + 0.07); spindle.rotation.x = Math.PI / 2;
+
+  // the day's disc
   const disc = makeDisc(blankLabel()); disc.group.scale.setScalar(WELL.r - 0.08); rig.add(disc.group);
   act(disc.group, 'card');
   const discRest = new THREE.Vector3(WELL.x, WELL.y, FZ + 0.06);
-  const lidPivot = at(new THREE.Group(), WELL.x, WELL.y + WELL.r + 0.04, FZ + 0.15);
-  const lid = new THREE.Mesh(new THREE.CircleGeometry(WELL.r + 0.07, 96), new THREE.MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.15, roughness: 0.03, clearcoat: 1, iridescence: 0.5, envMapIntensity: 1.6, side: THREE.DoubleSide }));
-  lid.position.y = -(WELL.r + 0.04); lidPivot.add(lid);
-  const lidRim = new THREE.Mesh(new THREE.TorusGeometry(WELL.r + 0.07, 0.03, 12, 128), chrome); lidRim.position.y = lid.position.y; lidPivot.add(lidRim);
+  // CD rainbow: two diffraction streaks that stay put while the print spins underneath
+  const sheen = new THREE.Mesh(new THREE.RingGeometry(0.12, 0.99, 128), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+    map: tex(512, 512, (x, w) => {
+      const c = w / 2, g = x.createConicGradient(-0.55, c, c);
+      [[0, 0], [0.07, 0], [0.095, 'rgba(255,130,200,.55)'], [0.115, 'rgba(255,226,140,.6)'], [0.135, 'rgba(120,255,205,.55)'], [0.155, 'rgba(110,170,255,.55)'], [0.185, 0],
+        [0.57, 0], [0.595, 'rgba(255,130,200,.4)'], [0.615, 'rgba(255,226,140,.45)'], [0.635, 'rgba(120,255,205,.4)'], [0.655, 'rgba(110,170,255,.4)'], [0.685, 0], [1, 0]]
+        .forEach(([o, col]) => g.addColorStop(o, col || 'rgba(0,0,0,0)'));
+      x.fillStyle = g; x.fillRect(0, 0, w, w);
+      x.globalCompositeOperation = 'destination-in';
+      const r = x.createRadialGradient(c, c, 0, c, c, c); r.addColorStop(0, 'rgba(0,0,0,0)'); r.addColorStop(0.3, 'rgba(0,0,0,.55)'); r.addColorStop(0.92, '#000'); r.addColorStop(1, 'rgba(0,0,0,0)');
+      x.fillStyle = r; x.fillRect(0, 0, w, w);
+    }) }));
+  sheen.position.z = 0.021; disc.group.add(sheen);
 
-  // LCD
-  at(new THREE.Mesh(new RoundedBoxGeometry(LCD.w + 0.26, LCD.h + 0.24, 0.14, 4, 0.14), pearlDeep), LCD.x, LCD.y, FZ + 0.03);
-  const lcdTex = tex(1024, 500);
-  const screen = at(new THREE.Mesh(new THREE.PlaneGeometry(LCD.w, LCD.h), new THREE.MeshPhysicalMaterial({ map: lcdTex, emissive: 0xffffff, emissiveMap: lcdTex, emissiveIntensity: 0.32, roughness: 0.1, clearcoat: 1 })), LCD.x, LCD.y, FZ + 0.105);
-  act(screen, 'lcd');
+  // smoked transparent lid on a chrome hinge plate engraved with the wordmark
+  const LID_R = RING.r1 + 0.03;
+  const hinge = at(new THREE.Mesh(new RoundedBoxGeometry(2.1, 0.3, 0.2, 4, 0.1), chrome), 0, WELL.y + LID_R + 0.14, FZ + 0.1);
+  const brand = glowPlane(1.2, 0.28, tex(600, 140, (x, w, h) => {
+    x.font = `400 96px ${DISPLAY}`; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillStyle = 'rgba(40,44,62,.85)'; x.fillText('genesis', w / 2, h / 2 + 4);
+    x.fillStyle = 'rgba(255,255,255,.55)'; x.fillText('genesis', w / 2, h / 2 + 7);
+  }));
+  brand.material.toneMapped = true; brand.position.set(0, 0, 0.101); hinge.add(brand);
+  const lidPivot = at(new THREE.Group(), WELL.x, WELL.y + LID_R, FZ + 0.17);
+  const lid = new THREE.Mesh(new THREE.CircleGeometry(LID_R, 160), new THREE.MeshPhysicalMaterial({ color: 0xc9cfff, transparent: true, opacity: 0.13, roughness: 0.02, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.02, iridescence: 0.45, iridescenceIOR: 1.35, envMapIntensity: 2.2, side: THREE.DoubleSide, depthWrite: false }));
+  lid.position.y = -LID_R; lidPivot.add(lid);
+  const lidRim = new THREE.Mesh(new THREE.TorusGeometry(LID_R, 0.032, 14, 180), chrome); lidRim.position.y = lid.position.y; lidPivot.add(lidRim);
 
-  // paper-tape badges
-  const moodTex = tex(700, 320), weatherTex = tex(460, 320);
-  const moodBadge = at(decal(1.7, 0.78, moodTex), 0.95, -0.36, FZ + 0.004); moodBadge.rotation.z = 0.03;
-  const weatherBadge = at(decal(1.12, 0.78, weatherTex), 2.55, -0.36, FZ + 0.004); weatherBadge.rotation.z = -0.03;
+  // status LED (top right)
+  const led = at(new THREE.Mesh(new THREE.CircleGeometry(0.055, 24), glowMat.clone()), 2.25, 2.48, FZ + 0.004);
 
-  // glossy keys
-  const keyGeo = new RoundedBoxGeometry(0.6, 0.5, 0.24, 4, 0.12), roundGeo = new THREE.CylinderGeometry(0.27, 0.27, 0.22, 48);
-  const keyMat = new THREE.MeshPhysicalMaterial({ color: 0xfbf8fe, roughness: 0.25, clearcoat: 1, iridescence: 0.3, sheen: 0.4, sheenColor: tint.clone() });
-  const playMat = new THREE.MeshPhysicalMaterial({ color: 0xeafff3, roughness: 0.22, clearcoat: 1, emissive: 0x9fe6c4, emissiveIntensity: 0.25 });
+  // luminous keys: smoked-glass caps in chrome bezels, glyphs glow in the day's accent
   const faces = {};
-  const keyFace = (name, kind, color) => { const t = tex(128, 128, (x, w) => glyph(x, kind, w, color)); faces[name] = t; return t; };
-  const mkKey = (name, kind, x, geo, mat, color, round) => {
-    const g = new THREE.Group(); const body = new THREE.Mesh(geo, mat); if (round) body.rotation.x = Math.PI / 2; g.add(body);
-    const f = decal(round ? 0.36 : 0.42, round ? 0.36 : 0.42, keyFace(name, kind, color), { clearcoat: 0 }); f.position.z = round ? 0.112 : 0.122; g.add(f);
-    g.userData.face = f; return act(at(g, x, -1.15, FZ + 0.08), name);
+  const mkKey = (name, kind, x, r) => {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.03, 0.16, 72), keyGlass); body.rotation.x = Math.PI / 2; g.add(body);
+    const bezel = new THREE.Mesh(new THREE.TorusGeometry(r + 0.012, 0.036, 16, 120), chrome); bezel.position.z = 0.062; g.add(bezel);
+    const t = tex(256, 256, (cx, w) => glyph(cx, kind, w, accentCss)); faces[name] = { t, kind };
+    const f = glowPlane(r * 1.5, r * 1.5, t); f.position.z = 0.085; g.add(f); g.userData.face = f;
+    return act(at(g, x, KY, FZ + 0.08), name);
   };
-  mkKey('prev', 'prev', 0.45, keyGeo, keyMat, '#7d6ca8');
-  const playKey = mkKey('play', 'play', 1.1, keyGeo, playMat, '#7d8cf0');
-  mkKey('next', 'next', 1.75, keyGeo, keyMat, '#7d6ca8');
-  mkKey('card', 'heart', 2.42, roundGeo, new THREE.MeshPhysicalMaterial({ color: 0xffe3ef, roughness: 0.22, clearcoat: 1 }), '#ff6fae', true);
-  mkKey('why', 'star', 3.0, roundGeo, new THREE.MeshPhysicalMaterial({ color: 0xfff6d6, roughness: 0.22, clearcoat: 1 }), '#ffd84d', true);
+  mkKey('prev', 'prev', -0.95, 0.32);
+  const playKey = mkKey('play', 'play', 0, 0.43);
+  mkKey('next', 'next', 0.95, 0.32);
+  mkKey('random', 'repeat', 2.08, 0.29);
+  const playHalo = new THREE.Mesh(new THREE.TorusGeometry(0.43 + 0.075, 0.022, 12, 140), glowMat.clone()); playHalo.position.z = 0.07; playKey.add(playHalo);
 
-  // big glossy buttons
-  const bigGeo = new RoundedBoxGeometry(1.5, 0.55, 0.26, 4, 0.2);
-  const bigLabel = (text, icon) => tex(512, 180, (x, w, h) => {
-    x.textBaseline = 'middle'; fitFont(x, text, 900, 70, UI, w - 150); x.shadowColor = 'rgba(80,40,120,.45)'; x.shadowBlur = 8; x.shadowOffsetY = 3; x.fillStyle = '#fff';
-    const tw = x.measureText(text).width, ix = (w - tw - 90) / 2;
-    if (icon === 'folder') { x.fillStyle = '#ffd36e'; x.beginPath(); x.roundRect(ix, 58, 70, 60, 8); x.fill(); x.fillStyle = '#ffc24a'; x.fillRect(ix, 50, 30, 14); x.fillStyle = '#fff'; }
-    else { x.fillRect(ix + 26, 52, 14, 70); x.fillRect(ix + 0, 80, 66, 14); }
-    x.fillText(text, ix + 90, 92);
-  });
-  const mkBig = (name, text, icon, xPos, color) => {
-    const g = new THREE.Group(); g.add(new THREE.Mesh(bigGeo, new THREE.MeshPhysicalMaterial({ color, roughness: 0.22, clearcoat: 1, clearcoatRoughness: 0.08, sheen: 0.5, sheenColor: 0xffffff })));
-    const l = decal(1.4, 0.49, bigLabel(text, icon), { clearcoat: 0 }); l.position.z = 0.132; g.add(l);
-    return act(at(g, xPos, -1.88, FZ + 0.08), name);
-  };
-  mkBig('archive', 'Архив', 'folder', 0.9, 0xb49cff);
-  mkBig('new', 'Новый день', 'plus', 2.5, 0xff8fc3);
-
-  // volume knob + line-art cat sticker
-  const knob = act(at(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.2, 40), chrome), -3.0, -1.86, FZ + 0.06), 'vol'); knob.rotation.x = Math.PI / 2;
-  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.11, 0.3), new THREE.MeshBasicMaterial({ color: 0x8e86a3 })); grip.position.set(0, 0.11, 0); knob.add(grip);
-  at(decal(1.0, 0.72, tex(300, 216, (x) => {
-    x.lineWidth = 6; x.strokeStyle = '#6b5a86'; x.lineJoin = 'round'; x.lineCap = 'round'; x.fillStyle = 'rgba(255,255,255,.7)';
-    x.beginPath(); x.moveTo(70, 110); x.lineTo(62, 40); x.lineTo(110, 72); x.quadraticCurveTo(150, 60, 190, 72); x.lineTo(238, 40); x.lineTo(230, 110);
-    x.quadraticCurveTo(250, 190, 150, 196); x.quadraticCurveTo(50, 190, 70, 110); x.fill(); x.stroke();
-    star(x, 150, 42, 18, '#ffe36e');
-    x.fillStyle = '#4a3d63'; x.beginPath(); x.arc(118, 128, 7, 0, 7); x.arc(182, 128, 7, 0, 7); x.fill();
-    x.beginPath(); x.moveTo(140, 150); x.quadraticCurveTo(150, 160, 160, 150); x.stroke();
-    x.beginPath(); x.moveTo(40, 140); x.lineTo(95, 146); x.moveTo(42, 162); x.lineTo(96, 156); x.moveTo(260, 140); x.lineTo(205, 146); x.moveTo(258, 162); x.lineTo(204, 156); x.stroke();
-    x.fillStyle = 'rgba(255,143,195,.55)'; x.beginPath(); x.ellipse(100, 152, 14, 8, 0, 0, 7); x.ellipse(200, 152, 14, 8, 0, 0, 7); x.fill();
-  }), { clearcoat: 0 }), -1.95, -1.82, FZ + 0.004);
+  // silver «ЗВУК» (volume) dial: knurled chrome body, spun cap, accent dot; engraved scale on the face
+  const knobG = act(at(new THREE.Group(), -2.08, KY, FZ), 'vol');
+  const knob = new THREE.Group(); knobG.add(knob);
+  const kBody = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.43, 0.32, 96), new THREE.MeshPhysicalMaterial({ color: 0xe9ebf2, map: knurl(), metalness: 0.35, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.12, envMapIntensity: 1.6 }));
+  kBody.rotation.x = Math.PI / 2; kBody.position.z = 0.16; knob.add(kBody);
+  const cap = new THREE.Mesh(new THREE.CircleGeometry(0.385, 96), new THREE.MeshPhysicalMaterial({ color: 0xf4f5fa, map: spun, metalness: 0.3, roughness: 0.26, clearcoat: 1, clearcoatRoughness: 0.1, envMapIntensity: 1.6 })); cap.position.z = 0.321; knob.add(cap);
+  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.035, 20), glowMat.clone()); dot.position.set(0, 0.27, 0.323); knob.add(dot);
+  at(glowPlane(1.36, 1.36, tex(512, 512, (x, w) => {
+    const c = w / 2; x.strokeStyle = 'rgba(214,218,240,.55)'; x.lineCap = 'round';
+    for (let i = 0; i <= 20; i++) { const a = (0.75 + (i / 20) * 1.5) * Math.PI, big = i % 5 === 0, r0 = 182, r1 = big ? 214 : 202; x.lineWidth = big ? 5 : 3; x.beginPath(); x.moveTo(c + Math.cos(a) * r0, c + Math.sin(a) * r0); x.lineTo(c + Math.cos(a) * r1, c + Math.sin(a) * r1); x.stroke(); }
+    x.fillStyle = 'rgba(214,218,240,.7)'; x.font = `700 34px ${UI}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText('ЗВУК', c, c + 232); x.fillText('−', c - 196, c + 196); x.fillText('+', c + 196, c + 196);
+  }), 0.9), -2.08, KY, FZ + 0.004);
 
   // ---- state ----
   const ptr = { x: 0, y: 0 }, ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
-  let day = null, playing = false, vel = 0, volume = 1, drop = 1, turn = 2.6, raf = 0, last = 0, hovered = null, t0 = performance.now();
+  let day = null, playing = false, vel = 0, volume = 1, drop = 1, turn = 2.6, raf = 0, last = 0, hovered = null, level = 0;
+  const t0 = performance.now();
 
-  function drawLcd({ progress = null, level = 0 } = {}) {
-    redraw(lcdTex, (x, w, h) => {
-      const g = x.createLinearGradient(0, 0, 0, h); g.addColorStop(0, '#d6f7e2'); g.addColorStop(1, '#a9e3c0'); x.fillStyle = g; x.fillRect(0, 0, w, h);
-      x.fillStyle = 'rgba(20,60,40,.05)'; for (let y = 0; y < h; y += 5) x.fillRect(0, y, w, 2);
-      const ink = '#1f4330'; x.fillStyle = ink; x.strokeStyle = ink; x.textBaseline = 'alphabetic';
-      if (!day) { x.font = `700 58px ${MONO}`; x.fillText('вставьте диск', 50, 190); x.font = `700 40px ${MONO}`; x.fillText('+ запишите первый день', 50, 300); return; }
-      x.save(); x.translate(26, 52); glyph(x, playing ? 'play' : 'pause', 92, ink); x.restore();
-      x.font = `700 66px ${MONO}`; x.fillText(day.date, 130, 120);
-      for (let i = 0; i < 8; i++) { const bh = 18 + i * 11; x.globalAlpha = i < Math.round(level * 8) ? 1 : 0.18; x.fillRect(w - 250 + i * 28, 128 - bh, 18, bh); } x.globalAlpha = 1;
-      fitFont(x, `${day.title} ♡`, 700, 58, MONO, w - 100); x.fillText(`${day.title} ♡`, 50, 225);
-      x.globalAlpha = 0.35; x.fillRect(50, 262, w - 100, 5); x.globalAlpha = 1;
-      if (progress != null) { x.fillRect(50, 258, (w - 100) * Math.max(0, Math.min(1, progress)), 13); }
-      x.font = `700 60px ${MONO}`; x.fillText(`♫ ${day.bpm} BPM`, 50, 380);
-      const word = day.moodWord || MOODS[day.mood].word; fitFont(x, word, 700, 54, MONO, 330); const tw = x.measureText(word).width;
-      x.fillText(word, w - 50 - tw, 380); x.lineWidth = 6; x.beginPath(); x.arc(w - 50 - tw - 52, 362, 28, 0, 7); x.stroke();
-      x.beginPath(); x.arc(w - 50 - tw - 62, 354, 4, 0, 7); x.arc(w - 50 - tw - 42, 354, 4, 0, 7); x.fill();
-      x.beginPath(); x.moveTo(w - 50 - tw - 66, 372); x.quadraticCurveTo(w - 50 - tw - 52, 372 + (day.mood - 2) * 6, w - 50 - tw - 38, 372); x.stroke();
+  function drawRing({ progress = null, level: lv = 0 } = {}) {
+    level = lv;
+    redraw(ringTex, (x, S) => {
+      const c = S / 2, rr = (r) => (r / RING.r1) * c, mid = rr((RING.r0 + RING.r1) / 2);
+      x.lineCap = 'round';
+      for (let i = 0; i < 120; i++) {
+        const a = (i / 120) * TAU - Math.PI / 2, big = i % 10 === 0, r0 = rr(RING.r0 + 0.03), r1 = rr(RING.r1 - (big ? 0.02 : 0.06));
+        x.strokeStyle = `rgba(222,226,255,${big ? 0.5 : 0.18})`; x.lineWidth = big ? 3 : 1.6;
+        x.beginPath(); x.moveTo(c + Math.cos(a) * r0, c + Math.sin(a) * r0); x.lineTo(c + Math.cos(a) * r1, c + Math.sin(a) * r1); x.stroke();
+      }
+      if (progress == null) return;
+      const p = clamp01(progress), end = -Math.PI / 2 + TAU * p;
+      x.shadowColor = accentCss; x.shadowBlur = 18; x.strokeStyle = accentCss; x.lineWidth = 7;
+      x.beginPath(); x.arc(c, c, mid, -Math.PI / 2, end); x.stroke();
+      x.shadowBlur = 16 + lv * 26; x.shadowColor = '#fff'; x.fillStyle = '#fff';
+      x.beginPath(); x.arc(c + Math.cos(end) * mid, c + Math.sin(end) * mid, 7 + lv * 5, 0, TAU); x.fill();
     });
   }
-  function drawBadges() {
-    redraw(moodTex, (x, w, h) => {
-      x.fillStyle = '#fffdf8'; x.shadowColor = 'rgba(90,60,140,.25)'; x.shadowBlur = 14; x.shadowOffsetY = 4; x.beginPath(); x.roundRect(14, 92, w - 28, h - 112, 22); x.fill(); x.shadowBlur = 0; x.shadowOffsetY = 0;
-      tape(x, 26, 22, 400, 74, day ? `#${pastel(day.glow, 0.45).getHexString()}` : '#ffc7de', -0.04);
-      x.fillStyle = INK; x.font = `800 44px ${UI}`; x.fillText('Моё настроение:', 48, 74);
-      for (let i = 0; i < 5; i++) { const on = day && i === day.mood; face(x, 92 + i * 129, 214, on ? 54 : 42, i, on); }
-    });
-    redraw(weatherTex, (x, w, h) => {
-      x.fillStyle = '#fffdf8'; x.shadowColor = 'rgba(90,60,140,.25)'; x.shadowBlur = 14; x.shadowOffsetY = 4; x.beginPath(); x.roundRect(14, 92, w - 28, h - 112, 22); x.fill(); x.shadowBlur = 0; x.shadowOffsetY = 0;
-      tape(x, 24, 24, 230, 70, '#d9ccff', 0.04);
-      x.fillStyle = INK; x.font = `800 44px ${UI}`; x.fillText('Погода:', 44, 74);
-      const wthr = day?.weather || { kind: 'sun', text: '—' };
-      weatherIcon(x, wthr.kind, 100, 212, 62);
-      x.fillStyle = INK; const words = wthr.text.split(' · ');
-      words.slice(0, 2).forEach((wd, i) => { fitFont(x, wd, 800, 42, UI, w - 210); x.fillText(wd, 182, words.length > 1 ? 196 + i * 48 : 226); });
-    });
-  }
-  drawLcd(); drawBadges();
+  drawRing();
 
   const fit = () => {
     const a = canvas.clientWidth / Math.max(1, canvas.clientHeight), t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-    camera.position.z = Math.max((BH * 1.1) / (2 * t), (BW * 1.08) / (2 * t * a));
+    camera.position.z = Math.max((BH * 1.13) / (2 * t), (BW * 1.12) / (2 * t * a));
   };
   function frame(now) {
     const dt = Math.min(0.05, last ? (now - last) / 1000 : 0.016); last = now;
     const t = (now - t0) / 1000;
     fit();
-    rig.rotation.y = damp(rig.rotation.y, ptr.x * 0.14, 4, dt);
-    rig.rotation.x = damp(rig.rotation.x, ptr.y * 0.09 + Math.sin(t * 0.7) * 0.012, 4, dt);
+    rig.rotation.y = damp(rig.rotation.y, ptr.x * 0.16, 4, dt);
+    rig.rotation.x = damp(rig.rotation.x, TILT + ptr.y * 0.08 + Math.sin(t * 0.7) * 0.012, 4, dt);
     rig.position.y = Math.sin(t * 0.9) * 0.04;
     drop = Math.min(1, drop + dt / 1.05); // disc drops in, lid closes
     const e = easeOutBack(drop);
     disc.group.position.set(discRest.x, discRest.y + (1 - e) * 3.4, discRest.z + (1 - e) * 1.6);
     disc.group.rotation.x = (1 - e) * 1.1;
-    const lidT = Math.max(0, Math.min(1, (drop - 0.55) / 0.45)), open = drop < 1 ? Math.min(1, drop * 6) : 0;
+    const lidT = clamp01((drop - 0.55) / 0.45), open = drop < 1 ? Math.min(1, drop * 6) : 0;
     lidPivot.rotation.x = -1.45 * Math.max(open * (1 - lidT * lidT * (3 - 2 * lidT)), 0);
     vel = damp(vel, playing ? turn : 0, playing ? 2.2 : 1.1, dt);
     disc.spin.rotation.z -= vel * dt;
-    knob.rotation.y = damp(knob.rotation.y, -volume * 4, 8, dt);
+    knob.rotation.z = damp(knob.rotation.z, (0.75 - volume * 1.5) * Math.PI, 8, dt);
     clickables.forEach((o) => {
       if (o === disc.group) return;
       o.userData.press = damp(o.userData.press, 0, 9, dt);
       o.userData.hover = damp(o.userData.hover, o === hovered ? 1 : 0, 10, dt);
-      o.position.z = o.userData.baseZ - o.userData.press * 0.1 + o.userData.hover * 0.03;
+      o.position.z = o.userData.baseZ - o.userData.press * 0.08 + o.userData.hover * 0.03;
+      if (o.userData.face) o.userData.face.material.opacity = 0.82 + o.userData.hover * 0.18;
     });
-    playKey.children[0].material.emissiveIntensity = 0.25 + (playing ? 0.25 + Math.sin(t * 5) * 0.08 : 0);
-    key.position.set(3 + ptr.x * 4, 4 - ptr.y * 3, 7);
+    const pulse = playing ? 0.55 + 0.25 * Math.sin(t * 4) + level * 0.35 : 0.3;
+    playHalo.material.opacity = Math.min(1, pulse + playKey.userData.hover * 0.3);
+    led.material.opacity = playing ? 0.6 + 0.4 * Math.abs(Math.sin(t * Math.PI * (turn / TAU))) : 0.25;
+    under.intensity = 24 + (playing ? 10 + level * 30 : 0);
+    key.position.set(-5 + ptr.x * 1.5, 5.5, 3); // off the mirror angle of the tilted face, so flat metal never flashes white
     renderer.render(scene, camera);
     raf = requestAnimationFrame(frame);
   }
@@ -269,25 +261,35 @@ export async function createPlayer3D(canvas, { onAction }) {
     const p = pick(e.clientX, e.clientY); if (!p) return;
     p.o.userData.press = 1;
     const name = p.o.userData.act;
-    if (name === 'lcd') { const u = p.uv?.x ?? 0.5; if (day) onAction?.('seek', Math.max(0, Math.min(1, (u - 0.05) / 0.9))); return; }
+    if (name === 'lcd') { // the ring: angle from 12 o'clock, clockwise → position in the song
+      if (day && p.uv) { const a = Math.atan2(p.uv.x - 0.5, p.uv.y - 0.5); onAction?.('seek', ((a + TAU) % TAU) / TAU); }
+      return;
+    }
     onAction?.(name);
   };
   window.addEventListener('pointermove', onMove);
   canvas.addEventListener('click', onClick);
 
+  const recolor = (hex) => {
+    const c = new THREE.Color(hex), hsl = {}; c.getHSL(hsl);
+    accent = new THREE.Color().setHSL(hsl.h, Math.max(0.6, hsl.s), 0.68); accentCss = `#${accent.getHexString()}`;
+    [glowMat, playHalo.material, led.material, dot.material].forEach((m) => m.color.copy(accent));
+    under.color.copy(accent);
+    Object.values(faces).forEach((f) => redraw(f.t, (x, w) => glyph(x, f.kind === 'play' && playing ? 'pause' : f.kind, w, accentCss)));
+  };
+
   return {
     setDay(d) { // d = { posterUrl, glow, bpm, date, title, mood, weather } | null
-      day = d; drop = 0; turn = d ? (2 * Math.PI) / (240 / d.bpm) : 2.6;
-      tint = pastel(d?.glow || '#d9c8ff', 0.5);
-      [pearl, pearlDeep, keyMat].forEach((m) => m.sheenColor.copy(tint));
-      wellMat.color.set(0xe4dcef).lerp(tint, 0.35);
-      if (d?.posterUrl) { const url = d.posterUrl; loadImage(url).then((img) => { if (day?.posterUrl === url) disc.setLabel(labelTexture(img)); }).catch(() => {}); }
+      day = d; drop = 0; turn = d ? TAU / (240 / d.bpm) : 2.6;
+      recolor(d?.glow || '#b7a6ff');
+      if (d?.posterUrl) { const url = d.posterUrl; loadImage(url).then((img) => { if (day?.posterUrl === url) disc.setLabel(labelTexture(img, '#0d0e1a')); }).catch(() => {}); }
       else disc.setLabel(blankLabel());
-      drawBadges(); drawLcd();
+      drawRing();
     },
-    setPlaying(on) { if (on === playing) return; playing = on; redraw(faces.play, (x, w) => glyph(x, on ? 'pause' : 'play', w, '#7d8cf0')); },
+    setPlaying(on) { if (on === playing) return; playing = on; redraw(faces.play.t, (x, w) => glyph(x, on ? 'pause' : 'play', w, accentCss)); },
     setVolume(v) { volume = v; },
-    lcd: drawLcd,
+    setPoster(url) { loadImage(url).then((img) => { if (day) { day.posterUrl = url; disc.setLabel(labelTexture(img, '#0d0e1a')); } }).catch(() => {}); }, // re-print the disc after a frame change
+    lcd: drawRing,
     press(name) { const o = clickables.find((c) => c.userData.act === name); if (o) o.userData.press = 1; },
     dispose() { cancelAnimationFrame(raf); window.removeEventListener('pointermove', onMove); canvas.removeEventListener('click', onClick); dispose(); },
   };

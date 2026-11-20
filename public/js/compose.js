@@ -7,6 +7,7 @@ import { MemoryRenderer } from './renderer.js';
 import { Player, voiceFor } from './player.js';
 import { esc, api } from './util.js';
 import { icon } from './icons.js';
+import { pickerHtml, bindPicker } from './frame-picker.js';
 
 const genreSelect = (id) => `<select id="${id}">${GENRE_OPTIONS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`;
 
@@ -64,6 +65,7 @@ export async function renderCompose(view) {
    <section class="win stagewin">
     <header class="titlebar"><span class="tt">Предпросмотр</span><span class="tsub">4:5 · живое воспоминание</span></header>
     <div class="wbody stage-c">
+      ${pickerHtml('poster')}
       <div class="frame sunken"><div class="placeholder">Здесь появится воспоминание дня: палитра из ваших фото, ритм из песни, форма из настроения текста.</div></div>
       <div class="controls" hidden><button type="button" class="bv play">▶ музыка</button></div>
       <div class="cplayer"></div>
@@ -74,7 +76,9 @@ export async function renderCompose(view) {
 
   const $ = (s) => view.querySelector(s);
   const status = (m) => { $('#status').textContent = m; }, mstatus = (m) => { $('#mstatus').textContent = m; };
-  let photos = [], tab = 'search', picked = null, fileSong = null, renderer = null, player = null, built = null;
+  let photos = [], tab = 'search', picked = null, fileSong = null, renderer = null, player = null, built = null, frame = 'poster';
+  // photo frame style: live-switches the preview once it exists; saved with the day
+  bindPicker(view.querySelector('.framepick'), (k) => { frame = k; renderer?.setFrame(k); });
 
   // photos
   $('#photos').onchange = async (e) => {
@@ -152,10 +156,10 @@ export async function renderCompose(view) {
 
     renderer?.stop(); player?.destroy();
     $('.frame').innerHTML = '<canvas></canvas>';
-    renderer = await new MemoryRenderer($('.frame canvas'), { title: textF.title, date, text, photos: photos.map((p) => p.dataUrl), song, style, dayNumber }).load();
+    renderer = await new MemoryRenderer($('.frame canvas'), { title: textF.title, date, text, photos: photos.map((p) => p.dataUrl), song, style, dayNumber, frame }).load();
     renderer.start();
     player = new Player(song, renderer); player.mount($('.cplayer'));
-    const ctl = $('.stage .controls'), pb = $('.play');
+    const ctl = $('.stage-c .controls'), pb = $('.stage-c .play');
     ctl.hidden = !player.hasAudio;
     pb.onclick = async () => { player.playing ? player.pause() : (renderer.restart(), await player.play()); pb.textContent = player.playing ? '❚❚ пауза' : '▶ музыка'; };
     $('.why').innerHTML = style.reasons.map((r) => `<li><b>${esc(r.k)}</b><span>${esc(r.v)}</span></li>`).join('') + `<li><b>Голос</b><span>${esc(voiceFor(style).label)}</span></li>`;
@@ -179,7 +183,7 @@ export async function renderCompose(view) {
       const poster = renderer.poster(); renderer.restart();
       const entry = await api('/api/days', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
         text: built.text, title: renderer.day.title, date: built.date, photos: photos.map((p) => p.dataUrl), poster, song: songOut,
-        analysis: { text: built.textF, photo: built.photoF, music: built.music }, style: built.style,
+        analysis: { text: built.textF, photo: built.photoF, music: built.music }, style: built.style, frame,
       }) });
       location.hash = `#/day/${encodeURIComponent(entry.id)}?play`;
     } catch (err) { status(`Не сохранилось: ${err.message}`); $('#save').disabled = false; }

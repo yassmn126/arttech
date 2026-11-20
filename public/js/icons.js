@@ -21,9 +21,38 @@ export const icon = {
   heart: svg('<path d="M12 20.5s-8-4.7-8-10.6A4.4 4.4 0 0 1 12 7.2a4.4 4.4 0 0 1 8 2.7c0 5.9-8 10.6-8 10.6z" fill="currentColor"/>'),
   planet: svg('<circle cx="12" cy="12" r="5.6" fill="currentColor"/><ellipse cx="12" cy="12" rx="10" ry="3.6" transform="rotate(-20 12 12)" ' + s + '/>'),
   smile: svg('<circle cx="12" cy="12" r="9" ' + s + '/><circle cx="9" cy="10" r="1.3" fill="currentColor"/><circle cx="15" cy="10" r="1.3" fill="currentColor"/><path d="M8.2 14.2c2.1 2.4 5.5 2.4 7.6 0" ' + s + '/>'),
+  film: svg('<rect x="3" y="5" width="13" height="14" rx="3" fill="currentColor"/><path d="M16.5 10.2 21 7.5v9l-4.5-2.7z" fill="currentColor"/>'),
   folder: svg('<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z" fill="currentColor"/>'),
   up: svg('<path d="M5 15l7-7 7 7" ' + s + '/>'),
   down: svg('<path d="M5 9l7 7 7-7" ' + s + '/>'),
   disc: svg('<circle cx="12" cy="12" r="8.5" ' + s + '/><circle cx="12" cy="12" r="2.4" fill="currentColor"/><path d="M12 6.8a5.2 5.2 0 0 1 5.2 5.2" ' + s + '/>'),
   write: svg('<path d="M5 19l1-4.2L15.6 5.2a2 2 0 0 1 2.8 0l.4.4a2 2 0 0 1 0 2.8L9.2 18 5 19zM14 7l3 3" ' + s + '/>'),
 };
+
+// ---- day panel: thin-line glyphs ----
+const t = 'fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"';
+icon.clock = svg(`<circle cx="12" cy="12" r="8.6" ${t}/><path d="M12 7.4V12l3.2 2" ${t}/>`);
+icon.heartLine = svg(`<path d="M12 20s-7.6-4.5-7.6-10.2A4.2 4.2 0 0 1 12 7.3a4.2 4.2 0 0 1 7.6 2.5C19.6 15.5 12 20 12 20z" ${t}/>`);
+icon.wave = svg(`<path d="M3 12h2M7 8v8M10.5 5v14M14 9v6M17.5 7v10M21 12h0" ${t}/>`);
+
+// mood face: 0 sad … 4 delighted; tense days get a zig-zag mouth
+export function moodFace(i = 2, tense = false) {
+  const c = [-3, -1.2, 0.6, 2.3, 3.6][i] ?? 0.6;
+  const mouth = tense ? 'M7.8 15.2l1.4-1 1.4 1 1.4-1 1.4 1 1.4-1 1.4 1' : `M8 14.4Q12 ${(14.4 + c).toFixed(1)} 16 14.4`;
+  return svg(`<circle cx="12" cy="12" r="9" ${t}/><circle cx="9" cy="10" r="1.15" fill="currentColor"/><circle cx="15" cy="10" r="1.15" fill="currentColor"/><path d="${mouth}" ${t}/>`);
+}
+
+// weather from the entry's own words (see util.weatherOf): sun / rain / snow / fog / wind / night / seasons
+const WX = {
+  sun: `<circle cx="12" cy="12" r="4.4" fill="currentColor"/><path d="M12 2.6v2.3M12 19.1v2.3M2.6 12h2.3M19.1 12h2.3M5.4 5.4l1.6 1.6M17 17l1.6 1.6M5.4 18.6 7 17M17 7l1.6-1.6" ${t}/>`,
+  rain: `<path d="M7.2 15.5a4 4 0 0 1-.4-8 5.3 5.3 0 0 1 10.1 1.3 3.4 3.4 0 0 1 .4 6.7z" ${t}/><path d="M8.5 18.2l-.8 2M12.3 18.2l-.8 2M16.1 18.2l-.8 2" ${t}/>`,
+  snow: `<path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M9.6 4.6 12 6.8l2.4-2.2M9.6 19.4 12 17.2l2.4 2.2" ${t}/>`,
+  fog: `<path d="M4 9h16M3 13h18M5 17h14" ${t}/>`,
+  wind: `<path d="M3 9h11.5a2.6 2.6 0 1 0-2.5-3.3M3 13.5h15.5a2.6 2.6 0 1 1-2.5 3.3M3 18h7" ${t}/>`,
+  night: `<path d="M19.5 14.6A8 8 0 0 1 9.4 4.5 8 8 0 1 0 19.5 14.6z" fill="currentColor"/>`,
+  autumn: `<path d="M5 19C5 10 10 5 19.5 4.5 19 14 14 19 5 19zM5 19l8-8" ${t}/>`,
+  spring: `<circle cx="12" cy="12" r="2.1" fill="currentColor"/>${[0, 72, 144, 216, 288].map((a) => `<ellipse cx="12" cy="6.4" rx="2.4" ry="3.3" transform="rotate(${a} 12 12)" ${t}/>`).join('')}`,
+};
+const WX_KIND = { heat: 'sun', summer: 'sun', frost: 'snow', winter: 'snow' };
+export const weatherKind = (kind) => (WX[kind] ? kind : WX_KIND[kind] || 'sun');
+export const weatherIcon = (kind) => svg(WX[weatherKind(kind)]);

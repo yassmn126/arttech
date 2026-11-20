@@ -1,6 +1,8 @@
 // Living memory renderer: a 4:5 page (1080×1350) that every day shares,
 // filled by the day's technique, palette, type, rhythm and texture.
 import { rng, canvas, windowFor, prepare, drawScene } from './techniques.js';
+import { prepareFrame, drawFrame, FRAME_IDS } from './frames.js';
+import { drawStickers } from './stickers.js';
 
 export const W = 1080, H = 1350, M = Math.round(W * 0.06);
 const WEEKDAYS = ['ВС', 'ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'];
@@ -30,16 +32,17 @@ export class MemoryRenderer {
     this.cv = cv; this.ctx = cv.getContext('2d');
     cv.width = W; cv.height = H;
     this.day = day; this.st = day.style; this.getLevel = null; this.raf = 0; this.t0 = 0;
+    this.frame = FRAME_IDS.includes(day.frame) ? day.frame : 'poster'; // photo presentation: art poster or a photo frame
+    this.frames = {}; // prepared frames, so switching back and forth is instant
   }
 
   async load() {
-    const st = this.st, R = rng(st.seed);
+    const st = this.st;
     const fam = `${st.type.italic ? 'italic ' : ''}${st.type.weight} 72px Fraunces`;
-    await Promise.allSettled([fam, '400 40px Caveat', '400 24px "JetBrains Mono"', 'italic 400 30px Fraunces'].map((f) => document.fonts.load(f, 'АаЯя')));
+    await Promise.allSettled([fam, '400 40px Caveat', '700 60px Caveat', '400 24px "JetBrains Mono"', '700 40px "JetBrains Mono"', 'italic 400 30px Fraunces'].map((f) => document.fonts.load(f, 'АаЯя')));
     this.imgs = await Promise.all(this.day.photos.map(loadImage));
-    this.win = windowFor(st.technique, W, H, M);
-    this.prep = prepare(st.technique, this.imgs, st, this.win, R);
-    this.grain = [0, 1, 2].map(() => noiseTile(R));
+    this.ensure(this.frame);
+    this.grain = [0, 1, 2].map(() => noiseTile(rng(st.seed ^ 0x6a09e667)));
     this.paperTex = noiseTile(rng(7), 192);
     // Dark pages get a real vignette; light pages a faint plum one, so light days stay luminous instead of greying.
     const v = this.ctx.createRadialGradient(W / 2, H * 0.45, W * 0.3, W / 2, H / 2, W * 0.85);
@@ -53,25 +56,39 @@ export class MemoryRenderer {
     return this;
   }
 
+  ensure(kind) {
+    if (kind === 'poster') {
+      if (!this.prep) { this.win = windowFor(this.st.technique, W, H, M); this.prep = prepare(this.st.technique, this.imgs, this.st, this.win, rng(this.st.seed)); }
+    } else this.frames[kind] ||= prepareFrame(kind, this.imgs, this.st);
+  }
+
+  // switch the photo presentation live (prepared once, then cached)
+  setFrame(kind) {
+    if (!FRAME_IDS.includes(kind)) return;
+    this.ensure(kind); this.frame = kind; this.day.frame = kind;
+    if (this.paused) this.renderAt(this.pausedAt); else if (!this.raf) this.renderAt(1.4, { still: true }); // running loops repaint on their own
+
+  }
+
   makeCaption(text) {
     const s = text.replace(/\s+/g, ' ').trim().split(/(?<=[.!?…])\s/)[0];
     return s.length > 96 ? s.slice(0, 94).replace(/\s*\S*$/, '') + '…' : s;
   }
 
-  frameAt(t) {
+  frameAt(t, still = false) {
     const st = this.st, n = this.imgs.length, ps = st.rhythm.photoSeconds;
     const beat = (t * st.rhythm.bpm) / 60, beatN = Math.floor(beat), phase = beat - beatN;
-    let pulse = Math.exp(-phase * 6) * st.rhythm.motion;
-    const lvl = this.getLevel?.();
+    let pulse = still ? 0 : Math.exp(-phase * 6) * st.rhythm.motion; // exports are calm stills: no flash, no bounce
+    const lvl = still ? null : this.getLevel?.();
     if (lvl != null) pulse = Math.max(pulse * 0.35, Math.min(1, lvl * 1.6) * st.rhythm.motion);
     const slot = t / ps, idx = Math.floor(slot) % n, local = slot - Math.floor(slot);
     const dis = 0.45 - st.fused.arousal * 0.25; // calmer days dissolve longer
     const mix = n > 1 && st.rhythm.transition === 'dissolve' ? Math.max(0, (local - (1 - dis)) / dis) : 0;
-    return { t, st, W, H, M, win: this.win, idx, next: (idx + 1) % n, mix: mix * mix * (3 - 2 * mix), local, pulse, beatN };
+    return { t, st, W, H, M, win: this.win, idx, next: (idx + 1) % n, mix: mix * mix * (3 - 2 * mix), local, pulse, beatN, still };
   }
 
-  renderAt(t) {
-    const ctx = this.ctx, st = this.st, f = this.frameAt(t);
+  renderAt(t, { still = false } = {}) {
+    const ctx = this.ctx, st = this.st, f = this.frameAt(t, still), framed = this.frame !== 'poster';
     this.lastFrame = f; // the player's VU meter reads the beat pulse from here
     ctx.save();
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
@@ -80,18 +97,26 @@ export class MemoryRenderer {
     ctx.fillStyle = ctx.createPattern(this.paperTex, 'repeat'); ctx.fillRect(0, 0, W, H);
     ctx.restore();
 
-    drawScene(ctx, st.technique, this.prep, f);
-    if (this.bloom) { ctx.save(); ctx.globalCompositeOperation = 'screen'; ctx.fillStyle = this.bloom; ctx.fillRect(0, 0, W, H); ctx.restore(); }
-    this.drawType(ctx, f);
+    if (framed) {
+      drawFrame(ctx, this.frames[this.frame], f, { title: this.day.title, date: this.day.date, dayNumber: this.day.dayNumber, song: this.day.song });
+    } else {
+      drawScene(ctx, st.technique, this.prep, f);
+      if (this.bloom) { ctx.save(); ctx.globalCompositeOperation = 'screen'; ctx.fillStyle = this.bloom; ctx.fillRect(0, 0, W, H); ctx.restore(); }
+      this.drawType(ctx, f);
+    }
 
-    ctx.save(); // film grain over everything, re-rolled each frame
-    ctx.globalCompositeOperation = 'overlay'; ctx.globalAlpha = st.texture.grain * 0.45;
+    ctx.save(); // film grain over everything, re-rolled each frame (stronger on the 35mm frame)
+    ctx.globalCompositeOperation = 'overlay'; ctx.globalAlpha = Math.min(0.6, st.texture.grain * 0.45 * (this.frame === 'film' ? 1.9 : framed ? 0.7 : 1));
     const g = this.grain[Math.floor(t * 24) % 3];
     ctx.translate(-((t * 997) % 256), -((t * 613) % 256));
     ctx.fillStyle = ctx.createPattern(g, 'repeat'); ctx.fillRect(0, 0, W + 256, H + 256);
     ctx.restore();
-    ctx.save(); ctx.fillStyle = this.vignette; ctx.fillRect(0, 0, W, H); ctx.restore();
+    if (!framed || this.frame === 'film') { ctx.save(); ctx.fillStyle = this.vignette; ctx.fillRect(0, 0, W, H); ctx.restore(); }
+    // optional stickers sit on top of the finished print (so they're in the saved card, the download and the video)
+    drawStickers(ctx, this.day.stickers, { date: this.day.date, title: this.day.title, palette: st.palette, ink: '#3a2f55' }, t, still);
   }
+
+  setStickers(list) { this.day.stickers = list; if (this.paused) this.renderAt(this.pausedAt); else if (!this.raf) this.renderAt(1.4, { still: true }); }
 
   drawType(ctx, f) {
     const st = this.st, d = this.day, ty = st.type, ink = st.ink;
@@ -124,8 +149,11 @@ export class MemoryRenderer {
     // constant: footer
     ctx.globalAlpha = 0.65; ctx.font = '400 19px "JetBrains Mono", monospace'; ctx.letterSpacing = '1px';
     const s = d.song || {};
-    ctx.fillText(`♪ ${[s.artist, s.title].filter(Boolean).join(' — ') || 'песня дня'} · ${st.rhythm.bpm} bpm`.slice(0, 64), M, H - M + 6);
-    ctx.textAlign = 'right'; ctx.fillText(`genesis · ${st.techniqueLabel.toLowerCase()}`, W - M, H - M + 6);
+    const right = `genesis · ${st.techniqueLabel.toLowerCase()}`, room = W - 2 * M - ctx.measureText(right).width - 24, tail = ` · ${st.rhythm.bpm} bpm`;
+    let song = [s.artist, s.title].filter(Boolean).join(' — ') || 'песня дня'; // shorten the song, never the bpm, so it can't run into the right side
+    if (ctx.measureText(`♪ ${song}${tail}`).width > room) { while (song.length > 4 && ctx.measureText(`♪ ${song}…${tail}`).width > room) song = song.slice(0, -1); song = `${song.trimEnd()}…`; }
+    ctx.fillText(`♪ ${song}${tail}`, M, H - M + 6);
+    ctx.textAlign = 'right'; ctx.fillText(right, W - M, H - M + 6);
     ctx.restore();
   }
 
@@ -143,8 +171,8 @@ export class MemoryRenderer {
   restart() { this.seek(0); }
   stop() { cancelAnimationFrame(this.raf); this.raf = 0; }
 
-  poster() { // a still that represents the day in the archive feed
-    this.renderAt(Math.max(1.4, Math.min(this.st.rhythm.photoSeconds * 0.5, 3.6)));
-    return this.cv.toDataURL('image/jpeg', 0.88);
+  poster(quality = 0.9) { // the exported card: a calm still of the current frame style (archive cover, disc label, download)
+    this.renderAt(Math.max(1.4, Math.min(this.st.rhythm.photoSeconds * 0.5, 3.6)), { still: true });
+    return this.cv.toDataURL('image/jpeg', quality);
   }
 }
